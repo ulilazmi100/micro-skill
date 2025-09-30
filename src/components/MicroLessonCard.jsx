@@ -1,15 +1,13 @@
 // src/components/MicroLessonCard.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 /**
- * MicroLessonCard (copy-aware)
+ * MicroLessonCard (copy-aware + "Copied!" toast with fade-in/out animation)
  *
- * Copies reflect the *visible* state:
- * - includes difficulty & practiced status
- * - includes hint if shown
- * - includes expanded full guide if expanded
+ * - Copies reflect the visible state (difficulty, status, hint, expanded guide).
+ * - "Copied!" toast is semi-transparent and uses a short fade + scale animation.
  *
- * Works offline-first: uses lesson fields (title, tip, practice_task, example_output, full_guide, hints, further_reads, difficulty)
+ * No external icon dependencies (inline SVGs).
  */
 
 const STORAGE_KEY = 'micro_practiced_v1';
@@ -134,9 +132,18 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
   const [practiced, setPracticed] = useState(false);
   const [guide, setGuide] = useState(null);
 
+  // toast state and timer ref
+  const [copied, setCopied] = useState(false);
+  const toastTimerRef = useRef(null);
+
   useEffect(() => {
     const setFromStorage = readPracticedSet();
     setPracticed(setFromStorage.has(String(index)));
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
   }, [index]);
 
   function ensureGuide() {
@@ -172,9 +179,18 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
     try { onPracticedToggle(nowPracticed); } catch (e) {}
   }
 
+  // show copied toast (always show after copy attempt)
+  function showCopied() {
+    setCopied(true);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => {
+      setCopied(false);
+      toastTimerRef.current = null;
+    }, 1800);
+  }
+
   // Build copy text that exactly mirrors what the user sees (status, difficulty, hint, expanded guide)
   function buildCopyText(context = 'practice') {
-    // context: 'practice' (default) | 'guide' (explicit copy guide)
     const title = lesson.title || `Lesson ${index + 1}`;
     const difficulty = lesson.difficulty || 'Beginner';
     const status = practiced ? 'Practiced' : 'Not practiced';
@@ -199,7 +215,6 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
       lines.push('');
     }
 
-    // if expanded or explicit guide copy, include the full guide
     if (expanded || context === 'guide') {
       const g = ensureGuide();
       if (g.fullGuideText) {
@@ -208,7 +223,6 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
         lines.push(g.fullGuideText);
         lines.push('---');
       } else {
-        // fall back to composing pieces
         if (g.objective) {
           lines.push('Objective:');
           lines.push(g.objective);
@@ -251,15 +265,14 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
     return lines.join('\n');
   }
 
+  // copy visible practice snapshot
   function copyCurrentPractice() {
     const txt = buildCopyText('practice');
-    if (!txt) return;
+    if (!txt) { showCopied(); return; }
+    // attempt copy and always show toast after attempt
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(txt).catch((e) => {
-        console.warn('clipboard failed', e);
-      });
+      navigator.clipboard.writeText(txt).finally(() => showCopied());
     } else {
-      // fallback
       try {
         const ta = document.createElement('textarea');
         ta.value = txt;
@@ -269,19 +282,21 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
         ta.select();
         document.execCommand('copy');
         document.body.removeChild(ta);
+        showCopied();
       } catch (e) {
         console.warn('fallback copy failed', e);
+        showCopied();
       }
     }
   }
 
+  // copy the full guide (explicit)
   function copyGuide() {
     const txt = buildCopyText('guide');
-    if (!txt) return;
+    if (!txt) { showCopied(); return; }
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(txt).catch((e) => console.warn('clipboard failed', e));
+      navigator.clipboard.writeText(txt).finally(() => showCopied());
     } else {
-      // fallback
       try {
         const ta = document.createElement('textarea');
         ta.value = txt;
@@ -291,8 +306,10 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
         ta.select();
         document.execCommand('copy');
         document.body.removeChild(ta);
+        showCopied();
       } catch (e) {
         console.warn('fallback copy failed', e);
+        showCopied();
       }
     }
   }
@@ -306,7 +323,19 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
   const diffClass = difficulty === 'experienced' ? 'bg-red-100 text-red-800' : (difficulty === 'intermediate' ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800');
 
   return (
-    <article className="p-3 border rounded shadow-sm bg-white" aria-labelledby={`lesson-${index}-title`}>
+    <article className="relative p-3 border rounded shadow-sm bg-white" aria-labelledby={`lesson-${index}-title`}>
+      {/* animated, semi-transparent copied toast */}
+      <div
+        aria-hidden
+        className={
+          'absolute top-2 right-2 z-10 pointer-events-none transform transition-all duration-300 ease-in-out ' +
+          (copied ? 'opacity-100 scale-100' : 'opacity-0 scale-95')
+        }
+        style={{ WebkitBackfaceVisibility: 'hidden' }}
+      >
+        <div className="bg-black/70 text-white text-xs px-2 py-1 rounded shadow" role="status">Copied!</div>
+      </div>
+
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
           <div className="flex items-center gap-2">
@@ -417,7 +446,7 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
 
                 <div className="flex gap-2 mt-2">
                   <button onClick={copyGuide} className="px-3 py-1 border rounded text-xs">Copy Guide (full)</button>
-                  <a href={`mailto:?subject=${encodeURIComponent('MicroSkill practice: ' + title)}&body=${encodeURIComponent((g.fullGuideText || '').substring(0, 2000))}`} className="px-3 py-1 border rounded text-xs">Share</a>
+                  <a href={`mailto:?subject=${encodeURIComponent('MicroSkill practice: ' + title)}&body=${encodeURIComponent((g.fullGuideText || '').substring(0, 2000))}`} className="px-3 py-1 border rounded text-xs" title="Share via email">Share</a>
                 </div>
               </div>
             );
