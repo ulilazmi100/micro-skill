@@ -1,9 +1,15 @@
 // local-api-server.js
-// Quick local Express server that exposes POST /api/generate
-// This duplicates the serverless logic so you can run a local demo without Vercel/Netlify CLI.
+// Local Express server to emulate the same behavior as the serverless functions.
 // Usage: node local-api-server.js
 //
-// Requirements: node 18+ (fetch available), npm install express cors dotenv
+// Environment variables used (same as serverless):
+// - DEMO_MODE (true|false)
+// - DEFAULT_PROVIDER
+// - OPENAI_API_KEY, OPENAI_MODEL
+// - HUGGINGFACE_API_KEY, HF_MODEL
+// - GEMINI_API_KEY, GEMINI_MODEL
+//
+// Note: Node 18+ recommended for global fetch. If not available, install node-fetch and adapt.
 
 const express = require('express');
 const cors = require('cors');
@@ -15,8 +21,6 @@ app.use(express.json());
 
 const PORT = process.env.LOCAL_API_PORT || 5174;
 
-const DEMO_MODE = (process.env.DEMO_MODE === 'true');
-
 const SYSTEM_PROMPT = `You are MicroSkill, a concise and practical micro-mentor. Your job: produce short, high-utility outputs for busy gig workers. Be direct, practical, and optimism-focused. Always follow the user's instructions and strict output constraints below.
 Important rules:
 - Keep micro-lessons short: each lesson must be ≤ 45 words.
@@ -27,22 +31,6 @@ Important rules:
 - Return output in clean JSON with keys: micro_lessons (array), profile_short, profile_long, cover_message.
 - Avoid medical or legal advice. If the request requires a licensed professional, respond: "I can't advise on that — consult a qualified professional."
 - If missing required info, return JSON: { "error": "MISSING: [what]" }`;
-
-function tryParseJSON(text) {
-  if (!text || typeof text !== 'string') return null;
-  try { return JSON.parse(text); } catch (e) {
-    const codeBlock = text.match(/```json\s*([\s\S]*?)\s*```/i) || text.match(/```([\s\S]*?)```/i);
-    if (codeBlock) {
-      try { return JSON.parse(codeBlock[1]); } catch (e2) {}
-    }
-    const first = text.indexOf('{'), last = text.lastIndexOf('}');
-    if (first !== -1 && last !== -1 && last > first) {
-      const candidate = text.slice(first, last + 1);
-      try { return JSON.parse(candidate); } catch (e3) {}
-    }
-    return null;
-  }
-}
 
 function buildUserPrompt({ jobTitle, skillLevel, strengths, platform, jobDesc }) {
   return `GEN: Micro-lessons + Profile + Cover
@@ -68,126 +56,207 @@ Constraints recap: lesson tip ≤45 words; practice_task 8–12 words; example_o
 Tone: friendly, confident, action-focused. No fluff. Use active verbs.`;
 }
 
-app.post('/api/generate', async (req, res) => {
-  const {
-    jobTitle = '',
-    skillLevel = 'beginner',
-    strengths = '',
-    platform = '',
-    jobDesc = '',
-    provider: requestedProvider
-  } = req.body || {};
+function tryParseJSON(text) {
+  if (!text || typeof text !== 'string') return null;
+  try { return JSON.parse(text); } catch (e) {}
+  const codeBlock = text.match(/```json\s*([\s\S]*?)\s*```/i) || text.match(/```([\s\S]*?)```/i);
+  if (codeBlock) {
+    try { return JSON.parse(codeBlock[1]); } catch (e) {}
+  }
+  const first = text.indexOf('{'), last = text.lastIndexOf('}');
+  if (first !== -1 && last !== -1 && last > first) {
+    const candidate = text.slice(first, last + 1);
+    try { return JSON.parse(candidate); } catch (e) {}
+  }
+  return null;
+}
 
-  if (!jobDesc) return res.status(400).json({ error: 'Missing jobDesc' });
+function stripCodeFences(s) {
+  if (!s || typeof s !== 'string') return s;
+  return s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+}
 
-  const provider = (requestedProvider || process.env.DEFAULT_PROVIDER || 'openai').toLowerCase();
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
 
-  // Demo mode fixture
-  if (DEMO_MODE) {
-    return res.json({
-      micro_lessons: [
-        { title: 'Reproduce fast', tip: 'Reproduce the bug and isolate the file.', practice_task: 'Reproduce a button not working in 10 minutes.', example_output: 'Button responds' },
-        { title: 'Add a test', tip: 'Create a simple failing test capturing the bug.', practice_task: 'Add one test for failing behavior.', example_output: 'Test fails then passes' },
-        { title: 'Small fix', tip: 'Make the minimal change and run existing tests.', practice_task: 'Fix the single failing line.', example_output: 'All tests green' },
-        { title: 'Document', tip: 'Add a short PR description and a demo GIF.', practice_task: 'Record a 20s demo GIF.', example_output: 'GIF shows fix' },
-        { title: 'Ask clarifying Q', tip: 'End with one question to define scope.', practice_task: 'Write 1 clarifying question.', example_output: 'Do you have a link?' }
-      ],
-      profile_short: 'Fast frontend dev — reliable fixes & fast delivery.',
-      profile_long: 'Front-end developer with fast turnarounds and clear demos. I deliver reliable fixes and solid tests.',
-      cover_message: 'Hi — I can fix your UI bug quickly with tests and a short demo. I’ll reproduce the issue, implement a minimal fix, and send a 20s demo. Can you share the repo or a reproduction link?'
+// provider implementations (same logic as serverless)
+async function callOpenAI(systemPrompt, userPrompt) {
+  const OPENAI_KEY = process.env.OPENAI_API_KEY;
+  if (!OPENAI_KEY) throw new Error('OpenAI API key not configured');
+  const model = process.env.OPENAI_MODEL || 'gpt-3.5-turbo';
+  const url = 'https://api.openai.com/v1/chat/completions';
+  const payload = {
+    model,
+    messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+    temperature: 0.25,
+    max_tokens: 10000
+  };
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_KEY}` },
+    body: JSON.stringify(payload)
+  });
+
+  const txt = await resp.text();
+  if (!resp.ok) throw new Error(`OpenAI API error: ${resp.status} ${txt}`);
+  const data = JSON.parse(txt);
+  return data?.choices?.[0]?.message?.content || '';
+}
+
+async function callHuggingFace(systemPrompt, userPrompt) {
+  const HF_KEY = process.env.HUGGINGFACE_API_KEY;
+  const HF_MODEL = process.env.HF_MODEL || 'mistralai/Mistral-7B-Instruct-v0.3';
+  if (!HF_KEY) throw new Error('Hugging Face API key not configured');
+
+  const hfInput = `${systemPrompt}\n\n${userPrompt}`;
+  const url = `https://api-inference.huggingface.co/models/${HF_MODEL}`;
+
+  const maxRetries = 3;
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    attempt++;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${HF_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputs: hfInput, parameters: { max_new_tokens: 10000, temperature: 0.25 } })
     });
+    const text = await r.text();
+    if (r.ok) {
+      try {
+        const j = JSON.parse(text);
+        if (Array.isArray(j) && j[0]?.generated_text) return j[0].generated_text;
+        if (j?.generated_text) return j.generated_text;
+        return text;
+      } catch (e) {
+        return text;
+      }
+    } else {
+      if (r.status >= 500 && r.status < 600 && attempt < maxRetries) {
+        await sleep(500 * Math.pow(2, attempt - 1));
+        continue;
+      }
+      throw new Error(`HuggingFace API error: ${r.status} ${text}`);
+    }
+  }
+  throw new Error('HuggingFace retries exhausted');
+}
+
+async function callGemini(systemPrompt, userPrompt) {
+  const rawKey = process.env.GEMINI_API_KEY || '';
+  const GEMINI_KEY = rawKey.trim();
+  const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  if (!GEMINI_KEY) throw new Error('Gemini API key not configured');
+
+  const endpointBase = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
+  const payload = {
+    contents: [{ parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+    generationConfig: { temperature: 0.25, maxOutputTokens: 10000, candidateCount: 1 }
+  };
+
+  async function doRequest(useQueryKey = false) {
+    const url = useQueryKey ? `${endpointBase}?key=${encodeURIComponent(GEMINI_KEY)}` : endpointBase;
+    const headers = { 'Content-Type': 'application/json' };
+    if (!useQueryKey) headers['x-goog-api-key'] = GEMINI_KEY;
+    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+    const text = await r.text();
+    return { status: r.status, text };
   }
 
-  const userPrompt = buildUserPrompt({ jobTitle, skillLevel, strengths, platform, jobDesc });
+  const maxAttempts = 3;
+  let attempt = 0;
+  let lastResp = null;
+  while (attempt < maxAttempts) {
+    attempt++;
+    let resp = await doRequest(false);
+    console.log(`Gemini header attempt ${attempt} status=${resp.status}`);
+    console.log('Gemini body (header):', resp.text);
 
-  try {
-    if (provider === 'openai') {
-      const OPENAI_KEY = process.env.OPENAI_API_KEY;
-      if (!OPENAI_KEY) return res.status(500).json({ error: 'OpenAI API key not configured' });
-
-      const model = process.env.OPENAI_MODEL || 'gpt-3.5-turbo';
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
-        body: JSON.stringify({ model, messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: userPrompt }], temperature: 0.25, max_tokens: 700 })
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        return res.status(500).json({ error: 'OpenAI API error', details: text });
-      }
-      const data = await response.json();
-      const assistantText = data.choices?.[0]?.message?.content || '';
-      const parsed = tryParseJSON(assistantText);
-      if (parsed) return res.json(parsed);
-      return res.json({ error: 'Failed to parse model JSON', raw: assistantText });
+    if ([401, 403, 404].includes(resp.status)) {
+      resp = await doRequest(true);
+      console.log(`Gemini fallback attempt ${attempt} status=${resp.status}`);
+      console.log('Gemini body (fallback):', resp.text);
     }
 
-    if (provider === 'huggingface') {
-      const HF_KEY = process.env.HUGGINGFACE_API_KEY;
-      const HF_MODEL = process.env.HF_MODEL || 'mistralai/Mistral-7B-Instruct-v0.3';
-      if (!HF_KEY) return res.status(500).json({ error: 'Hugging Face API key not configured' });
+    lastResp = resp;
+    if (resp.status >= 200 && resp.status < 300) {
+      let gemData = null;
+      try { gemData = JSON.parse(resp.text); } catch (e) { gemData = null; }
 
-      const hfInput = `${SYSTEM_PROMPT}\n\n${userPrompt}`;
-      const hfResp = await fetch(`https://api-inference.huggingface.co/models/${HF_MODEL}`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${HF_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ inputs: hfInput, parameters: { max_new_tokens: 700, temperature: 0.25 } })
-      });
-
-      if (!hfResp.ok) {
-        const txt = await hfResp.text();
-        return res.status(500).json({ error: 'HuggingFace API error', details: txt });
-      }
-
-      const hfData = await hfResp.json();
       let assistantText = '';
-      if (Array.isArray(hfData) && hfData[0]?.generated_text) assistantText = hfData[0].generated_text;
-      else if (hfData.generated_text) assistantText = hfData.generated_text;
-      else assistantText = typeof hfData === 'string' ? hfData : JSON.stringify(hfData);
-
-      const parsed = tryParseJSON(assistantText);
-      if (parsed) return res.json(parsed);
-      return res.json({ error: 'Failed to parse model JSON', raw: assistantText });
-    }
-
-    if (provider === 'gemini') {
-      const GEMINI_KEY = process.env.GEMINI_API_KEY;
-      const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-      if (!GEMINI_KEY) return res.status(500).json({ error: 'Gemini API key not configured' });
-
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generate`;
-      const payload = { prompt: { text: `${SYSTEM_PROMPT}\n\n${userPrompt}` }, maxOutputTokens: 700, temperature: 0.25 };
-
-      const gemResp = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY },
-        body: JSON.stringify(payload)
-      });
-
-      if (!gemResp.ok) {
-        const txt = await gemResp.text();
-        return res.status(500).json({ error: 'Gemini API error', details: txt });
-      }
-
-      const gemData = await gemResp.json();
-      let assistantText = '';
-      if (gemData?.candidates && Array.isArray(gemData.candidates) && gemData.candidates[0]?.content) {
-        const c = gemData.candidates[0].content;
-        assistantText = typeof c === 'string' ? c : (Array.isArray(c) ? c.map(p => p?.text || '').join('') : '');
-      } else if (gemData?.output?.length) {
-        assistantText = gemData.output.map(o => (o?.content || []).map(p => p?.text || '').join('')).join('');
+      if (gemData?.candidates && gemData.candidates[0]?.content?.parts) {
+        assistantText = gemData.candidates[0].content.parts.map(p => p?.text || '').join('');
       } else if (gemData?.responseText) {
         assistantText = gemData.responseText;
       } else {
-        assistantText = JSON.stringify(gemData);
+        assistantText = resp.text;
       }
 
-      const parsed = tryParseJSON(assistantText);
-      if (parsed) return res.json(parsed);
-      return res.json({ error: 'Failed to parse model JSON', raw: assistantText });
+      assistantText = stripCodeFences(assistantText);
+      return assistantText;
     }
 
-    return res.status(400).json({ error: 'Unsupported provider' });
+    if (resp.status >= 500 && resp.status < 600 && attempt < maxAttempts) {
+      await sleep(500 * Math.pow(2, attempt - 1));
+      continue;
+    }
+
+    break;
+  }
+
+  const details = lastResp ? lastResp.text : 'No response';
+  throw new Error(`Gemini API error: status=${lastResp?.status || 'unknown'} body=${details}`);
+}
+
+app.post('/api/generate', async (req, res) => {
+  try {
+    const {
+      jobTitle = '',
+      skillLevel = 'beginner',
+      strengths = '',
+      platform = '',
+      jobDesc = '',
+      provider: requestedProvider
+    } = req.body || {};
+
+    const provider = (requestedProvider || process.env.DEFAULT_PROVIDER || 'openai').toLowerCase();
+
+    if (!jobDesc) return res.status(400).json({ error: 'Missing jobDesc' });
+
+    if (process.env.DEMO_MODE === 'true') {
+      return res.json({
+        micro_lessons: [
+          { title: 'Reproduce fast', tip: 'Reproduce the bug and isolate the file.', practice_task: 'Reproduce a button not working in 10 minutes.', example_output: 'Button responds' },
+          { title: 'Add a test', tip: 'Create a simple failing test capturing the bug.', practice_task: 'Add one test for failing behavior.', example_output: 'Test fails then passes' },
+          { title: 'Small fix', tip: 'Make the minimal change and run existing tests.', practice_task: 'Fix the single failing line.', example_output: 'All tests green' },
+          { title: 'Document', tip: 'Add a short PR description and a demo GIF.', practice_task: 'Record a 20s demo GIF.', example_output: 'GIF shows fix' },
+          { title: 'Ask clarifying Q', tip: 'End with one question to define scope.', practice_task: 'Write 1 clarifying question.', example_output: 'Do you have a link?' }
+        ],
+        profile_short: 'Fast frontend dev — reliable fixes & fast delivery.',
+        profile_long: 'Front-end developer with fast turnarounds and clear demos. I deliver reliable fixes and solid tests.',
+        cover_message: 'Hi — I can fix your UI bug quickly with tests and a short demo.'
+      });
+    }
+
+    const userPrompt = buildUserPrompt({ jobTitle, skillLevel, strengths, platform, jobDesc });
+
+    let assistantText = '';
+    if (provider === 'openai') {
+      assistantText = await callOpenAI(SYSTEM_PROMPT, userPrompt);
+    } else if (provider === 'huggingface') {
+      assistantText = await callHuggingFace(SYSTEM_PROMPT, userPrompt);
+    } else if (provider === 'gemini') {
+      assistantText = await callGemini(SYSTEM_PROMPT, userPrompt);
+    } else {
+      return res.status(400).json({ error: 'Unsupported provider' });
+    }
+
+    const cleaned = stripCodeFences(assistantText);
+    const parsed = tryParseJSON(cleaned);
+    if (parsed) return res.json(parsed);
+    // Return raw for debugging if parse failed
+    return res.json({ error: 'Failed to parse model JSON', raw: cleaned });
   } catch (err) {
     console.error('local-api error', err);
     return res.status(500).json({ error: 'Server error', details: String(err) });
