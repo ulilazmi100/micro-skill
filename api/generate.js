@@ -18,6 +18,7 @@ export default async function handler(req, res) {
 
   if (!jobDesc) return res.status(400).json({ error: 'Missing jobDesc' });
 
+  // Demo fixture for offline testing
   if (process.env.DEMO_MODE === 'true') {
     return res.status(200).json({
       micro_lessons: [
@@ -33,6 +34,7 @@ export default async function handler(req, res) {
     });
   }
 
+  // Put the full system prompt you use here
   const SYSTEM_PROMPT = `You are MicroSkill, a concise and practical micro-mentor. Your job: produce short, high-utility outputs for busy gig workers. Be direct, practical, and optimism-focused. Always follow the user's instructions and strict output constraints below.
 Important rules:
 - Keep micro-lessons short: each lesson must be ≤ 45 words.
@@ -87,6 +89,7 @@ Tone: friendly, confident, action-focused. No fluff. Use active verbs.`;
   const userPrompt = buildUserPrompt({ jobTitle, skillLevel, strengths, platform, jobDesc });
 
   try {
+    // ------------- OpenAI section -------------
     if (provider === 'openai') {
       const OPENAI_KEY = process.env.OPENAI_API_KEY;
       if (!OPENAI_KEY) return res.status(500).json({ error: 'OpenAI API key not configured' });
@@ -116,6 +119,7 @@ Tone: friendly, confident, action-focused. No fluff. Use active verbs.`;
       return res.status(200).json({ error: 'Failed to parse model JSON', raw: assistantText });
     }
 
+    // ------------- Hugging Face section -------------
     if (provider === 'huggingface') {
       const HF_KEY = process.env.HUGGINGFACE_API_KEY;
       const HF_MODEL = process.env.HF_MODEL || 'mistralai/Mistral-7B-Instruct-v0.3';
@@ -138,51 +142,89 @@ Tone: friendly, confident, action-focused. No fluff. Use active verbs.`;
       let assistantText = '';
       if (Array.isArray(hfData) && hfData[0]?.generated_text) assistantText = hfData[0].generated_text;
       else if (hfData.generated_text) assistantText = hfData.generated_text;
-      else if (typeof hfData === 'string') assistantText = hfData;
-      else assistantText = JSON.stringify(hfData);
+      else assistantText = typeof hfData === 'string' ? hfData : JSON.stringify(hfData);
 
       const parsed = tryParseJSON(assistantText);
       if (parsed) return res.status(200).json(parsed);
       return res.status(200).json({ error: 'Failed to parse model JSON', raw: assistantText });
     }
 
+    // ------------- Gemini section (generateContent) -------------
     if (provider === 'gemini') {
-      const GEMINI_KEY = process.env.GEMINI_API_KEY;
-      const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+      const rawKey = process.env.GEMINI_API_KEY || '';
+      const GEMINI_KEY = rawKey.trim();
+      const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
       if (!GEMINI_KEY) return res.status(500).json({ error: 'Gemini API key not configured as GEMINI_API_KEY' });
 
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generate`;
-      const geminiPayload = { prompt: { text: `${SYSTEM_PROMPT}\n\n${userPrompt}` }, maxOutputTokens: 700, temperature: 0.25 };
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
 
-      const gemResp = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY },
-        body: JSON.stringify(geminiPayload)
-      });
+      const payload = {
+        contents: [
+          { parts: [{ text: `${SYSTEM_PROMPT}\n\n${userPrompt}` }] }
+        ],
+        generationConfig: {
+          temperature: 0.25,
+          maxOutputTokens: 700,
+          candidateCount: 1
+        }
+      };
 
-      if (!gemResp.ok) {
-        const txt = await gemResp.text();
-        console.error('Gemini API error', gemResp.status, txt);
-        return res.status(500).json({ error: 'Gemini API error', details: txt });
+      // Try header auth, fallback to ?key= if header fails (helps in some hosting envs)
+      async function doRequest(useQueryKey = false) {
+        const url = useQueryKey ? `${endpoint}?key=${encodeURIComponent(GEMINI_KEY)}` : endpoint;
+        const headers = { 'Content-Type': 'application/json' };
+        if (!useQueryKey) headers['x-goog-api-key'] = GEMINI_KEY;
+        const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+        const text = await r.text();
+        return { status: r.status, text };
       }
 
-      const gemData = await gemResp.json();
-      let assistantText = '';
-      if (gemData?.candidates && Array.isArray(gemData.candidates) && gemData.candidates[0]?.content) {
-        const c = gemData.candidates[0].content;
-        if (typeof c === 'string') assistantText = c;
-        else if (Array.isArray(c)) assistantText = c.map(p => p?.text || '').join('');
-      } else if (gemData?.output?.[0]?.content) {
-        assistantText = gemData.output.map(o => (o?.content || []).map(p => p?.text || '').join('')).join('');
-      } else if (gemData?.responseText) {
-        assistantText = gemData.responseText;
-      } else {
-        assistantText = JSON.stringify(gemData);
-      }
+      // Single attempt (header) -> fallback to ?key if 401/403/404
+      try {
+        let resp = await doRequest(false);
+        console.log('Gemini header attempt status', resp.status);
+        console.log('Gemini body:', resp.text);
 
-      const parsed = tryParseJSON(assistantText);
-      if (parsed) return res.status(200).json(parsed);
-      return res.status(200).json({ error: 'Failed to parse model JSON', raw: assistantText });
+        if ([401, 403, 404].includes(resp.status)) {
+          // try fallback
+          resp = await doRequest(true);
+          console.log('Gemini fallback ?key= status', resp.status);
+          console.log('Gemini fallback body:', resp.text);
+        }
+
+        if (resp.status >= 200 && resp.status < 300) {
+          // Parse standard gemini response shapes
+          let gemData;
+          try { gemData = JSON.parse(resp.text); } catch (e) { gemData = null; }
+
+          let assistantText = '';
+          if (gemData?.candidates && gemData.candidates[0]?.content?.parts) {
+            const parts = gemData.candidates[0].content.parts;
+            assistantText = parts.map(p => p?.text || '').join('');
+          } else if (gemData?.candidates && typeof gemData.candidates[0]?.content === 'string') {
+            assistantText = gemData.candidates[0].content;
+          } else if (gemData?.responseText) {
+            assistantText = gemData.responseText;
+          } else {
+            assistantText = resp.text;
+          }
+
+          // If assistantText contains triple-backtick code fences, strip them
+          assistantText = assistantText.replace(/^```json\\s*/i, '').replace(/\\s*```$/i, '').trim();
+
+          const parsed = tryParseJSON(assistantText);
+          if (parsed) return res.status(200).json(parsed);
+
+          // If not valid JSON, return raw with parse hint
+          return res.status(200).json({ error: 'Failed to parse Gemini JSON', raw: assistantText });
+        }
+
+        // Non-2xx -> surface the body for debugging
+        return res.status(500).json({ error: 'Gemini API error', status: resp.status, details: resp.text });
+      } catch (err) {
+        console.error('Gemini fetch unexpected error', err);
+        return res.status(500).json({ error: 'Gemini fetch error', details: String(err) });
+      }
     }
 
     return res.status(400).json({ error: 'Unsupported provider' });
