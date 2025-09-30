@@ -3,13 +3,73 @@ import React, { useState, useEffect } from 'react';
 import MicroLessonCard from './MicroLessonCard';
 import { generateMicroContent } from '../utils/api';
 
+// LocalStorage keys
+const PRACTICED_KEY = 'micro_practiced_v1';
+const STREAK_KEY = 'micro_streak_v1';
+
+function readPracticedSet() {
+  try {
+    const raw = localStorage.getItem(PRACTICED_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr);
+  } catch (e) {
+    return new Set();
+  }
+}
+
+function writePracticedSet(set) {
+  try {
+    const arr = Array.from(set);
+    localStorage.setItem(PRACTICED_KEY, JSON.stringify(arr));
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+function readStreak() {
+  try {
+    const raw = localStorage.getItem(STREAK_KEY);
+    if (!raw) return { lastDate: null, streak: 0 };
+    return JSON.parse(raw);
+  } catch (e) {
+    return { lastDate: null, streak: 0 };
+  }
+}
+
+function writeStreak(obj) {
+  try {
+    localStorage.setItem(STREAK_KEY, JSON.stringify(obj));
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+// helper to format YYYY-MM-DD
+function todayISO(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+}
+
+// Build exportable guide text for each lesson (simple deterministic)
+function buildGuideText(lesson, idx) {
+  const title = lesson.title || `Lesson ${idx + 1}`;
+  const tip = lesson.tip || '';
+  const practice = lesson.practice_task || '';
+  const example = lesson.example_output || '';
+  const difficulty = lesson.difficulty || 'unknown';
+  const guide = lesson.full_guide || (`Objective: ${title}\n\nTip: ${tip}\n\nPractice task: ${practice}\n\nExample output: ${example}\n\nDifficulty: ${difficulty}\n`);
+  // sanitize and ensure newlines
+  return `## ${idx + 1}. ${title}\n\n${guide}\n`;
+}
+
 export default function MicroSkillForm() {
-  // Read build-time Vite envs
   const defaultProvider = import.meta.env.VITE_DEFAULT_PROVIDER || 'openai';
   const functionPath = import.meta.env.VITE_FUNCTION_PATH || '/api/generate';
   const demoMode = String(import.meta.env.VITE_DEMO_MODE || '').toLowerCase() === 'true' || String(import.meta.env.VITE_DEMO_MODE || '') === '1';
 
-  // Start with empty inputs (user requested empty form before typing)
   const [jobTitle, setJobTitle] = useState('');
   const [skillLevel, setSkillLevel] = useState('beginner');
   const [strengths, setStrengths] = useState('');
@@ -22,11 +82,28 @@ export default function MicroSkillForm() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
 
-  // Clear result/error when user edits input to avoid stale display
+  const [practicedSet, setPracticedSet] = useState(readPracticedSet());
+  const [streak, setStreak] = useState(() => readStreak().streak);
+
+  // refresh practiced set on mount
   useEffect(() => {
-    setError(null);
-    // keep result until user hits Generate or Load Demo (not clearing on every small change to avoid jarring UX)
-  }, [jobTitle, skillLevel, strengths, platform, jobDesc, provider]);
+    setPracticedSet(readPracticedSet());
+    setStreak(readStreak().streak || 0);
+  }, []);
+
+  // Called by child card via localStorage changes — convenient tiny pub/sub: watch storage event
+  useEffect(() => {
+    function onStorage(e) {
+      if (e.key === PRACTICED_KEY) {
+        setPracticedSet(readPracticedSet());
+      }
+      if (e.key === STREAK_KEY) {
+        setStreak(readStreak().streak || 0);
+      }
+    }
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   async function onGenerate() {
     setLoading(true);
@@ -36,9 +113,11 @@ export default function MicroSkillForm() {
       const payload = { jobTitle, skillLevel, strengths, platform, jobDesc, provider };
       const res = await generateMicroContent(payload);
       setResult(res);
+      // reset practiced set for new lessons (stop marking previously practiced)
+      writePracticedSet(new Set());
+      setPracticedSet(new Set());
     } catch (err) {
       console.error(err);
-      // normalize error display
       if (err && typeof err === 'object' && err.error) {
         setError(typeof err.error === 'string' ? err.error : JSON.stringify(err.error));
       } else {
@@ -51,29 +130,10 @@ export default function MicroSkillForm() {
 
   function copyToClipboard(text) {
     if (!text) return;
-    if (navigator?.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).catch((e) => {
-        console.warn('Clipboard write failed', e);
-      });
-    } else {
-      // fallback (best-effort)
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.left = '-9999px';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-      } catch (e) {
-        console.warn('Fallback clipboard failed', e);
-      }
-    }
+    if (navigator?.clipboard?.writeText) navigator.clipboard.writeText(text).catch(() => {});
   }
 
   function loadDemo() {
-    // demo values — single source, small and friendly
     setJobTitle('Frontend bug fix');
     setSkillLevel('beginner');
     setStrengths('fast turnarounds, clear communication');
@@ -93,63 +153,96 @@ export default function MicroSkillForm() {
     setError(null);
   }
 
+  // progress calculation
+  const totalLessons = Array.isArray(result?.micro_lessons) ? result.micro_lessons.length : 0;
+  const practicedCount = practicedSet.size;
+  const progressPct = totalLessons > 0 ? Math.round((practicedCount / totalLessons) * 100) : 0;
+
+  // export all practice routines (Markdown) and download
+  function exportAll() {
+    if (!result || !Array.isArray(result.micro_lessons)) return;
+    const mdParts = [];
+    mdParts.push(`# MicroSkill Practice Pack\n`);
+    mdParts.push(`Job Title: ${jobTitle || '—'}\n`);
+    mdParts.push(`Generated: ${new Date().toISOString()}\n\n`);
+    result.micro_lessons.forEach((lesson, i) => {
+      mdParts.push(buildGuideText(lesson, i));
+    });
+    const blob = new Blob([mdParts.join('\n')], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(jobTitle || 'micro-practice').replace(/\s+/g, '-').toLowerCase()}-practice.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // mark practiced action used by UI to update streak if marking for today's date
+  function onLessonPracticedToggled(markedToday) {
+    // update practiced set snapshot
+    setPracticedSet(readPracticedSet());
+
+    // Update streak: if user marks practiced today and the stored streak lastDate != today, update
+    const s = readStreak();
+    const lastDate = s.lastDate;
+    const today = todayISO(0);
+    if (markedToday) {
+      if (lastDate === today) {
+        // already counted today
+      } else {
+        // if lastDate was yesterday then increment else restart
+        if (lastDate === todayISO(-1)) {
+          s.streak = (s.streak || 0) + 1;
+        } else {
+          s.streak = 1;
+        }
+        s.lastDate = today;
+        writeStreak(s);
+        setStreak(s.streak);
+        // write to storage to notify other windows
+        try { localStorage.setItem(STREAK_KEY, JSON.stringify(s)); } catch {}
+      }
+    }
+  }
+
   return (
     <div>
-      <div className="grid grid-cols-1 gap-3 mb-4">
-        <input
-          className="p-2 border rounded"
-          value={jobTitle}
-          onChange={e => setJobTitle(e.target.value)}
-          placeholder="Job Title (e.g. Frontend bug fix)"
-          aria-label="Job Title"
-        />
+      {/* Gamification header */}
+      <div className="mb-4 p-3 rounded bg-gradient-to-r from-blue-50 to-white border">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm text-gray-600">Practice progress</div>
+            <div className="text-xl font-semibold">{practicedCount}/{totalLessons} practiced</div>
+            <div className="text-xs text-gray-500 mt-1">Streak: <strong>{streak}</strong> day{streak === 1 ? '' : 's'}</div>
+          </div>
+          <div className="w-64">
+            <div className="h-3 bg-gray-200 rounded overflow-hidden">
+              <div className="h-3 bg-green-500" style={{ width: `${progressPct}%` }} />
+            </div>
+            <div className="text-xs text-gray-500 mt-1 text-right">{progressPct}%</div>
+          </div>
+        </div>
+      </div>
 
-        <select
-          className="p-2 border rounded"
-          value={skillLevel}
-          onChange={e => setSkillLevel(e.target.value)}
-          aria-label="Skill level"
-        >
+      {/* Form (same as before) */}
+      <div className="grid grid-cols-1 gap-3 mb-4">
+        <input className="p-2 border rounded" value={jobTitle} onChange={e => setJobTitle(e.target.value)} placeholder="Job Title (e.g. Frontend bug fix)" />
+        <select className="p-2 border rounded" value={skillLevel} onChange={e => setSkillLevel(e.target.value)}>
           <option value="beginner">beginner</option>
           <option value="intermediate">intermediate</option>
           <option value="experienced">experienced</option>
         </select>
-
-        <input
-          className="p-2 border rounded"
-          value={strengths}
-          onChange={e => setStrengths(e.target.value)}
-          placeholder="Strengths (comma-separated)"
-          aria-label="Strengths"
-        />
-
-        <input
-          className="p-2 border rounded"
-          value={platform}
-          onChange={e => setPlatform(e.target.value)}
-          placeholder="Platform (optional, e.g., Upwork)"
-          aria-label="Platform"
-        />
-
-        <textarea
-          className="p-2 border rounded"
-          value={jobDesc}
-          onChange={e => setJobDesc(e.target.value)}
-          rows={4}
-          placeholder="Paste full job description here (required)"
-          aria-label="Job description"
-        />
+        <input className="p-2 border rounded" value={strengths} onChange={e => setStrengths(e.target.value)} placeholder="Strengths (comma-separated)" />
+        <input className="p-2 border rounded" value={platform} onChange={e => setPlatform(e.target.value)} placeholder="Platform (optional)" />
+        <textarea className="p-2 border rounded" value={jobDesc} onChange={e => setJobDesc(e.target.value)} rows={4} placeholder="Paste job description" />
       </div>
 
       <div className="grid grid-cols-2 gap-2 mb-3">
         <div>
           <label className="text-sm block mb-1">Provider</label>
-          <select
-            className="p-2 border rounded w-full"
-            value={provider}
-            onChange={e => setProvider(e.target.value)}
-            aria-label="Model provider"
-          >
+          <select className="p-2 border rounded w-full" value={provider} onChange={e => setProvider(e.target.value)}>
             <option value="openai">OpenAI (recommended)</option>
             <option value="huggingface">Hugging Face (open models)</option>
             <option value="gemini">Gemini (Google)</option>
@@ -159,50 +252,30 @@ export default function MicroSkillForm() {
 
         <div>
           <label className="text-sm block mb-1">Function Path</label>
-          <input
-            className="p-2 border rounded w-full bg-gray-50"
-            value={functionPath}
-            readOnly
-            aria-readonly="true"
-            aria-label="Function path"
-          />
+          <input className="p-2 border rounded w-full bg-gray-50" value={functionPath} readOnly />
           <div className="text-xs text-gray-500 mt-1">If using Netlify, set <code>VITE_FUNCTION_PATH=/.netlify/functions/generate</code></div>
         </div>
       </div>
 
       <div className="flex gap-2 mb-4">
-        <button
-          disabled={loading}
-          onClick={onGenerate}
-          className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-60"
-          title="Generate micro-lessons"
-        >
+        <button disabled={loading} onClick={onGenerate} className="px-4 py-2 bg-blue-600 text-white rounded">
           {loading ? 'Generating…' : 'Generate'}
         </button>
 
         {demoMode && (
-          <button
-            onClick={loadDemo}
-            className="px-4 py-2 border rounded bg-gray-50 hover:bg-gray-100"
-            title="Load example demo values"
-            disabled={loading}
-          >
-            Load Demo
-          </button>
+          <button onClick={loadDemo} className="px-4 py-2 border rounded bg-gray-50">Load Demo</button>
         )}
 
-        <button
-          onClick={clearForm}
-          className="px-4 py-2 border rounded"
-          disabled={loading}
-          title="Clear form"
-        >
-          Clear
-        </button>
+        <button onClick={clearForm} className="px-4 py-2 border rounded">Clear</button>
+
+        <div className="ml-auto flex gap-2">
+          <button onClick={exportAll} disabled={!result} className="px-4 py-2 border rounded bg-white">Export All (MD)</button>
+        </div>
       </div>
 
       {error && <div className="text-red-600 mb-4">{error}</div>}
 
+      {/* Results */}
       {result && (
         <div>
           <section className="mb-4">
@@ -210,7 +283,19 @@ export default function MicroSkillForm() {
             <div className="grid gap-3 mt-2">
               {Array.isArray(result.micro_lessons) && result.micro_lessons.length > 0 ? (
                 result.micro_lessons.map((m, idx) => (
-                  <MicroLessonCard key={idx} lesson={m} />
+                  <MicroLessonCard
+                    key={idx}
+                    index={idx}
+                    lesson={m}
+                    onPracticedToggle={(isNowPracticed) => {
+                      // Update practiced set in parent & update streak if it's newly practiced today
+                      const setNow = readPracticedSet();
+                      // make sure it's in localStorage already (child toggled it)
+                      setPracticedSet(setNow);
+                      // notify for streak update
+                      if (isNowPracticed) onLessonPracticedToggled(true);
+                    }}
+                  />
                 ))
               ) : (
                 <div className="text-sm text-gray-500">No micro-lessons returned</div>
