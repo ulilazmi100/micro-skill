@@ -1,3 +1,6 @@
+// prompts/prompts.js
+// Single source-of-truth for system prompt and user-prompt builder (ESM module)
+
 export const SYSTEM_PROMPT = `You are MicroSkill, a concise and practical micro-mentor. Your job: produce short, high-utility outputs for busy gig workers. Be direct, practical, and optimism-focused. Always follow the user's instructions and strict output constraints below.
 
 Important rules:
@@ -33,3 +36,9 @@ Produce output in JSON with fields:
 Constraints recap: lesson tip ≤45 words; practice_task 8–12 words; example_output ≤8 words; cover_message 35–55 words.
 Tone: friendly, confident, action-focused. No fluff. Use active verbs.`;
 }
+
+// default export for convenience
+export default {
+  SYSTEM_PROMPT,
+  buildUserPrompt
+};
