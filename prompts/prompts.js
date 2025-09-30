@@ -1,7 +1,8 @@
 // prompts/prompts.js
-// Single source-of-truth for system prompt and user-prompt builder (ESM module)
+// CommonJS export (no ESM syntax) to avoid Node reparsing warning.
+// Single source-of-truth for system prompt and user prompt builder.
 
-export const SYSTEM_PROMPT = `You are MicroSkill, a concise and practical micro-mentor. Your job: produce short, high-utility outputs for busy gig workers. Be direct, practical, and optimism-focused. Always follow the user's instructions and strict output constraints below.
+const SYSTEM_PROMPT = `You are MicroSkill, a concise and practical micro-mentor. Your job: produce short, high-utility outputs for busy gig workers. Be direct, practical, and optimism-focused. Always follow the user's instructions and strict output constraints below.
 
 Important rules:
 - Keep micro-lessons short: each lesson must be ≤ 45 words.
@@ -13,7 +14,7 @@ Important rules:
 - Avoid medical or legal advice. If the request requires a licensed professional, respond: "I can't advise on that — consult a qualified professional."
 - If missing required info, return JSON: { "error": "MISSING: [what]" }`;
 
-export function buildUserPrompt({jobTitle, skillLevel, strengths, platform, jobDesc}) {
+function buildUserPrompt({ jobTitle, skillLevel, strengths, platform, jobDesc }) {
   return `GEN: Micro-lessons + Profile + Cover
 JOB_TITLE: ${jobTitle}
 SKILL_LEVEL: ${skillLevel}
@@ -37,8 +38,8 @@ Constraints recap: lesson tip ≤45 words; practice_task 8–12 words; example_o
 Tone: friendly, confident, action-focused. No fluff. Use active verbs.`;
 }
 
-// default export for convenience
-export default {
+// Export CommonJS
+module.exports = {
   SYSTEM_PROMPT,
   buildUserPrompt
 };

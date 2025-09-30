@@ -1,12 +1,10 @@
-// netlify/functions/generate.js (Netlify wrapper - thin adapter)
+// netlify/functions/generate.js (Netlify wrapper - requires prompts CommonJS)
 const path = require('path');
 const aiClient = require(path.join(process.cwd(), 'lib', 'aiClient.js'));
-const { pathToFileURL } = require('url');
 
-async function loadPrompts() {
-  const p = path.join(process.cwd(), 'prompts', 'prompts.js');
-  return import(pathToFileURL(p).href);
-}
+// sync require prompts
+const prompts = require(path.join(process.cwd(), 'prompts', 'prompts.js'));
+const buildUserPrompt = prompts.buildUserPrompt;
 
 exports.handler = async function (event) {
   try {
@@ -16,8 +14,7 @@ exports.handler = async function (event) {
     const { jobTitle = '', skillLevel = 'beginner', strengths = '', platform = '', jobDesc = '', provider: requestedProvider } = body;
     if (!jobDesc) return { statusCode: 400, body: JSON.stringify({ error: 'MISSING: jobDesc' }) };
 
-    const prompts = await loadPrompts();
-    const userPrompt = prompts.buildUserPrompt({ jobTitle, skillLevel, strengths, platform, jobDesc });
+    const userPrompt = buildUserPrompt({ jobTitle, skillLevel, strengths, platform, jobDesc });
 
     console.log('netlify function: calling AI client provider=', requestedProvider || process.env.DEFAULT_PROVIDER || 'openai');
 

@@ -1,23 +1,19 @@
-// api/generate.js (Vercel wrapper - thin adapter)
+// api/generate.js (Vercel wrapper - thin adapter, uses CommonJS require for prompts)
 const path = require('path');
 const aiClient = require(path.join(process.cwd(), 'lib', 'aiClient.js'));
-const { pathToFileURL } = require('url');
 
-async function loadPrompts() {
-  const p = path.join(process.cwd(), 'prompts', 'prompts.js');
-  return import(pathToFileURL(p).href);
-}
+// Load prompts synchronously (CommonJS)
+const prompts = require(path.join(process.cwd(), 'prompts', 'prompts.js'));
+const buildUserPrompt = prompts.buildUserPrompt;
 
 module.exports = async function (req, res) {
   try {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
     const body = req.body || {};
     const { jobTitle = '', skillLevel = 'beginner', strengths = '', platform = '', jobDesc = '', provider: requestedProvider } = body;
-    if (!jobDesc) return res.status(400).json({ error: 'MISSING: jobDesc' });
 
-    // load prompts module
-    const prompts = await loadPrompts();
-    const buildUserPrompt = prompts.buildUserPrompt;
+    if (!jobDesc) return res.status(400).json({ error: 'MISSING: jobDesc' });
 
     const userPrompt = buildUserPrompt({ jobTitle, skillLevel, strengths, platform, jobDesc });
 

@@ -1,16 +1,14 @@
-// local-api-server.js (wrapper using lib/aiClient.js and prompts/prompts.js)
+// local-api-server.js (wrapper using lib/aiClient.js and prompts/prompts.js via require)
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { pathToFileURL } = require('url');
 require('dotenv').config();
 
 const aiClient = require(path.join(process.cwd(), 'lib', 'aiClient.js'));
 
-async function loadPrompts() {
-  const p = path.join(process.cwd(), 'prompts', 'prompts.js');
-  return import(pathToFileURL(p).href);
-}
+// require prompts synchronously
+const prompts = require(path.join(process.cwd(), 'prompts', 'prompts.js'));
+const buildUserPrompt = prompts.buildUserPrompt;
 
 const app = express();
 app.use(cors());
@@ -23,8 +21,7 @@ app.post('/api/generate', async (req, res) => {
     const { jobTitle = '', skillLevel = 'beginner', strengths = '', platform = '', jobDesc = '', provider: requestedProvider } = req.body || {};
     if (!jobDesc) return res.status(400).json({ error: 'MISSING: jobDesc' });
 
-    const prompts = await loadPrompts();
-    const userPrompt = prompts.buildUserPrompt({ jobTitle, skillLevel, strengths, platform, jobDesc });
+    const userPrompt = buildUserPrompt({ jobTitle, skillLevel, strengths, platform, jobDesc });
 
     console.log('local-api-server: calling AI client provider=', requestedProvider || process.env.DEFAULT_PROVIDER || 'openai');
 
