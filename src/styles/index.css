@@ -3,3 +3,14 @@
 @tailwind utilities;
 
 html, body, #root { height: 100%; }
+
+/* Basic markdown styling for rendered expansions */
+.md-content h1 { font-size: 1.125rem; font-weight: 700; margin-top: 0.75rem; margin-bottom: 0.5rem; }
+.md-content h2 { font-size: 1.05rem; font-weight: 700; margin-top: 0.65rem; margin-bottom: 0.45rem; }
+.md-content h3 { font-size: 1rem; font-weight: 600; margin-top: 0.5rem; margin-bottom: 0.4rem; }
+.md-content p { margin: 0.3rem 0; line-height: 1.4; }
+.md-content ul, .md-content ol { margin: 0.25rem 0 0.5rem 1rem; padding: 0; }
+.md-content li { margin: 0.2rem 0; }
+.md-content a { text-decoration: underline; color: inherit; }
+.md-content strong { font-weight: 600; }
+.md-content em { font-style: italic; }

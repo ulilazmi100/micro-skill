@@ -2,14 +2,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 /**
- * MicroLessonCard (merged)
+ * MicroLessonCard with on-demand supplement fetch + Markdown rendering (lightweight).
  *
  * Props:
- * - lesson: lesson object
+ * - lesson: object
  * - index: number
- * - fetchSupplement: async function({ type, lessonIndex, lesson }) => { supplement: string }
- * - onSaveSupplement: function(index, patch) -> should merge patch into the lesson in parent state
- * - onPracticedToggle: optional callback (isNowPracticed)
+ * - fetchSupplement: async function({ type, lessonIndex, lesson }) => { supplement }
+ * - onSaveSupplement: function(index, patch)
+ * - onPracticedToggle: function(isNowPracticed)
  */
 
 const STORAGE_KEY = 'micro_practiced_v1';
@@ -36,85 +36,86 @@ function writePracticedSet(set) {
   }
 }
 
-function searchLink(q) {
-  return `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+// Minimal markdown -> HTML converter to display expansions.
+// Supports: headings (#, ##, ###), unordered lists (- item), ordered lists (1. item or 1) item),
+// links [text](url), bold **text**, italic *text*, paragraphs and line breaks.
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-function buildExpandedGuide(lesson, idx) {
-  const title = lesson.title || `Lesson ${idx + 1}`;
-  const tip = lesson.tip || lesson.practice_task || '';
-  const practice = lesson.practice_task || '';
-  const example = lesson.example_output || '';
+function mdToHtml(md) {
+  if (!md) return '';
+  const lines = String(md).split(/\r?\n/);
+  let out = '';
+  let inUl = false;
+  let inOl = false;
 
-  const objective = `Objective — What you'll accomplish: ${title}. Focus: ${practice ? practice : tip}.`;
-  const why = `Why it matters: This practice builds muscle memory for the specific task and reduces future friction. Short, repeated practice embeds the workflow.`;
+  function closeLists() {
+    if (inUl) { out += '</ul>'; inUl = false; }
+    if (inOl) { out += '</ol>'; inOl = false; }
+  }
 
-  const steps = [
-    '1) Reproduce the scenario quickly — replicate the failing behavior or target outcome.',
-    '2) Isolate the smallest element/component responsible — reduce to a minimal reproduction.',
-    '3) Implement a focused change or experiment to address the immediate cause.',
-    '4) Verify with a quick test or manual check; ensure the behavior improved.',
-    '5) Document the change, write a short test or checklist, and record results.'
-  ];
+  function inlineFormat(text) {
+    // escape HTML first
+    let t = escapeHtml(text);
+    // links: [text](url)
+    t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+    // bold **text**
+    t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    // italic *text*
+    t = t.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    return t;
+  }
 
-  const practiceVerb = (practice.match(/\b(create|add|fix|write|test|record|reproduce|isolate|implement|run)\b/i) || [])[0];
-  const tailoredTip = practiceVerb ? `Pro tip: When you ${practiceVerb.toLowerCase()}, keep the scope minimal and commit atomic changes.` : 'Pro tip: Keep changes small and tests focused.';
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
 
-  const routine = [
-    `Repeat 1 (5–10 minutes): Reproduce + perform the minimal fix.`,
-    `Repeat 2 (5–10 minutes): Add a short test or run checklist.`,
-    `Repeat 3 (3–5 minutes): Document the steps and confirm no regressions.`
-  ];
+    if (line === '') {
+      closeLists();
+      out += '<p></p>';
+      continue;
+    }
 
-  const timeEstimate = 'Time estimate: 15–30 minutes (depending on complexity).';
+    // headings
+    if (/^###\s+/.test(line)) {
+      closeLists();
+      out += `<h3>${inlineFormat(line.replace(/^###\s+/, ''))}</h3>`;
+      continue;
+    }
+    if (/^##\s+/.test(line)) {
+      closeLists();
+      out += `<h2>${inlineFormat(line.replace(/^##\s+/, ''))}</h2>`;
+      continue;
+    }
+    if (/^#\s+/.test(line)) {
+      closeLists();
+      out += `<h1>${inlineFormat(line.replace(/^#\s+/, ''))}</h1>`;
+      continue;
+    }
 
-  const keywords = [title, practice, example].filter(Boolean).slice(0, 3).join(' ');
-  const furtherReads = lesson.further_reads && Array.isArray(lesson.further_reads) && lesson.further_reads.length > 0
-    ? lesson.further_reads
-    : [
-      { title: `Quick search: ${title}`, url: searchLink(keywords || title) },
-      { title: 'How to write focused tests', url: searchLink('how to write focused unit tests') },
-      { title: 'Minimal reproducible examples', url: searchLink('minimal reproducible example guide') }
-    ];
+    // unordered list
+    if (/^[-*]\s+/.test(line)) {
+      if (!inUl) { closeLists(); out += '<ul>'; inUl = true; }
+      out += `<li>${inlineFormat(line.replace(/^[-*]\s+/, ''))}</li>`;
+      continue;
+    }
 
-  const fullGuideText = [
-    `### ${title}`,
-    '',
-    objective,
-    '',
-    why,
-    '',
-    'Steps:',
-    ...steps,
-    '',
-    tailoredTip,
-    '',
-    'Practice routine:',
-    ...routine,
-    '',
-    timeEstimate,
-    '',
-    'Example output:',
-    `- ${example || 'Example not provided'}`,
-    '',
-    'Further reads:',
-    ...furtherReads.map((fr) => `- ${fr.title} — ${fr.url}`)
-  ].join('\n');
+    // ordered list: "1. " or "1) "
+    if (/^\d+[\.\)]\s+/.test(line)) {
+      if (!inOl) { closeLists(); out += '<ol>'; inOl = true; }
+      out += `<li>${inlineFormat(line.replace(/^\d+[\.\)]\s+/, ''))}</li>`;
+      continue;
+    }
 
-  return {
-    fullGuideText,
-    objective,
-    why,
-    steps,
-    tailoredTip,
-    routine,
-    timeEstimate,
-    furtherReads
-  };
+    // paragraphs / normal lines
+    out += `<p>${inlineFormat(line)}</p>`;
+  }
+
+  closeLists();
+  return out;
 }
 
-/* ---------- inline icons (tiny) ---------- */
-
+/* inline icons (tiny SVGs) */
 function IconChevronDown({ size = 14 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>); }
 function IconChevronUp({ size = 14 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none"><path d="M18 15l-6-6-6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>); }
 function IconLightbulb({ size = 14 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none"><path d="M9 18h6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /><path d="M10 22h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /><path d="M12 2a6 6 0 00-4 10.6V15a2 2 0 002 2h4a2 2 0 002-2v-2.4A6 6 0 0012 2z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>); }
@@ -133,13 +134,11 @@ export default function MicroLessonCard({
   const [expanded, setExpanded] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const [practiced, setPracticed] = useState(false);
-  const [guide, setGuide] = useState(null);
+  const [guideHtml, setGuideHtml] = useState(null);
 
-  // loading states for fetching supplement
   const [loadingExpansion, setLoadingExpansion] = useState(false);
   const [loadingHint, setLoadingHint] = useState(false);
 
-  // toast state and timer ref
   const [copied, setCopied] = useState(false);
   const toastTimerRef = useRef(null);
 
@@ -147,93 +146,17 @@ export default function MicroLessonCard({
     const setFromStorage = readPracticedSet();
     setPracticed(setFromStorage.has(String(index)));
     return () => {
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-      }
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     };
   }, [index]);
 
-  function ensureGuide() {
-    if (guide) return guide;
-    // priority: lesson.full_guide (server-supplied) -> lesson.fullGuideText (older name) -> build client-side
-    const g = lesson.full_guide ? { fullGuideText: lesson.full_guide } : (lesson.fullGuideText ? { fullGuideText: lesson.fullGuideText } : buildExpandedGuide(lesson, index));
-    setGuide(g);
-    return g;
-  }
-
-  async function handleFetchExpansion() {
-    // If we already have full_guide, just expand (no LLM)
-    if (lesson.full_guide || lesson.fullGuideText) {
-      setExpanded(true);
-      ensureGuide();
-      return;
+  // ensure we have guideHtml if lesson.full_guide exists
+  useEffect(() => {
+    if ((lesson.full_guide || lesson.fullGuideText) && !guideHtml) {
+      const md = lesson.full_guide || lesson.fullGuideText || '';
+      setGuideHtml(mdToHtml(md));
     }
-    // otherwise fetch from server/provider via fetchSupplement prop
-    if (!fetchSupplement || typeof fetchSupplement !== 'function') {
-      // fallback to client-side generation
-      const g = buildExpandedGuide(lesson, index);
-      setGuide(g);
-      setExpanded(true);
-      // optionally persist via onSaveSupplement
-      try { onSaveSupplement && onSaveSupplement(index, { full_guide: g.fullGuideText }); } catch (e) {}
-      return;
-    }
-
-    try {
-      setLoadingExpansion(true);
-      const resp = await fetchSupplement({ type: 'expansion', lessonIndex: index, lesson });
-      const text = resp && (resp.supplement || resp) ? (resp.supplement || resp) : '';
-      if (text && text.trim().length > 0) {
-        // save into lesson via callback so parent state is updated
-        onSaveSupplement && onSaveSupplement(index, { full_guide: text });
-        setGuide({ fullGuideText: text, objective: null }); // guide will be shown from fullGuideText
-      } else {
-        // fallback: client-side guide
-        const g = buildExpandedGuide(lesson, index);
-        onSaveSupplement && onSaveSupplement(index, { full_guide: g.fullGuideText });
-        setGuide(g);
-      }
-      setExpanded(true);
-    } catch (err) {
-      console.error('fetch expansion failed', err);
-      const g = buildExpandedGuide(lesson, index);
-      setGuide(g);
-      setExpanded(true);
-    } finally {
-      setLoadingExpansion(false);
-    }
-  }
-
-  async function handleFetchHint() {
-    // if hint already exists
-    if (lesson.hints && lesson.hints.length > 0 && lesson.hints[0]) {
-      setShowHint(v => !v);
-      return;
-    }
-    if (!fetchSupplement || typeof fetchSupplement !== 'function') {
-      // fallback hint
-      setShowHint(true);
-      return;
-    }
-    try {
-      setLoadingHint(true);
-      const resp = await fetchSupplement({ type: 'hint', lessonIndex: index, lesson });
-      const text = resp && (resp.supplement || resp) ? (resp.supplement || resp) : '';
-      if (text && text.trim().length > 0) {
-        // persist
-        onSaveSupplement && onSaveSupplement(index, { hints: [text] });
-        // show
-        setShowHint(true);
-      } else {
-        setShowHint(true);
-      }
-    } catch (err) {
-      console.error('fetch hint failed', err);
-      setShowHint(true);
-    } finally {
-      setLoadingHint(false);
-    }
-  }
+  }, [lesson, guideHtml]);
 
   function togglePracticed() {
     const setStorage = readPracticedSet();
@@ -252,7 +175,67 @@ export default function MicroLessonCard({
     try { onPracticedToggle(nowPracticed); } catch (e) {}
   }
 
-  // show copied toast (always show after copy attempt)
+  async function handleFetchExpansion() {
+    if (lesson.full_guide || lesson.fullGuideText) {
+      setExpanded(e => !e);
+      return;
+    }
+    if (!fetchSupplement) {
+      // fallback: build small guide client-side
+      const fallback = `### ${lesson.title || `Lesson ${index+1}`}\n\nObjective: ${lesson.title}\n\nTip: ${lesson.tip || ''}\n`;
+      setGuideHtml(mdToHtml(fallback));
+      setExpanded(true);
+      onSaveSupplement && onSaveSupplement(index, { full_guide: fallback });
+      return;
+    }
+    try {
+      setLoadingExpansion(true);
+      const resp = await fetchSupplement({ type: 'expansion', lessonIndex: index, lesson });
+      const text = resp && (resp.supplement || resp) ? (resp.supplement || resp) : '';
+      if (text && text.trim().length > 0) {
+        onSaveSupplement && onSaveSupplement(index, { full_guide: text });
+        setGuideHtml(mdToHtml(text));
+      } else {
+        const fallback = `### ${lesson.title || `Lesson ${index+1}`}\n\nObjective: ${lesson.title}\n\nTip: ${lesson.tip || ''}\n`;
+        onSaveSupplement && onSaveSupplement(index, { full_guide: fallback });
+        setGuideHtml(mdToHtml(fallback));
+      }
+      setExpanded(true);
+    } catch (err) {
+      console.error('fetch expansion failed', err);
+      const fallback = `### ${lesson.title || `Lesson ${index+1}`}\n\nObjective: ${lesson.title}\n\nTip: ${lesson.tip || ''}\n`;
+      setGuideHtml(mdToHtml(fallback));
+      setExpanded(true);
+    } finally {
+      setLoadingExpansion(false);
+    }
+  }
+
+  async function handleFetchHint() {
+    if (lesson.hints && lesson.hints.length > 0 && lesson.hints[0]) {
+      setShowHint(s => !s);
+      return;
+    }
+    if (!fetchSupplement) {
+      setShowHint(true);
+      return;
+    }
+    try {
+      setLoadingHint(true);
+      const resp = await fetchSupplement({ type: 'hint', lessonIndex: index, lesson });
+      const text = resp && (resp.supplement || resp) ? (resp.supplement || resp) : '';
+      if (text && text.trim().length > 0) {
+        onSaveSupplement && onSaveSupplement(index, { hints: [text] });
+      }
+      setShowHint(true);
+    } catch (err) {
+      console.error('fetch hint failed', err);
+      setShowHint(true);
+    } finally {
+      setLoadingHint(false);
+    }
+  }
+
   function showCopied() {
     setCopied(true);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -262,14 +245,14 @@ export default function MicroLessonCard({
     }, 1600);
   }
 
-  function onCopyText(text) {
-    if (!text) { showCopied(); return; }
+  function copyText(t) {
+    if (!t) { showCopied(); return; }
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(() => showCopied()).catch(() => showCopied());
+      navigator.clipboard.writeText(t).then(() => showCopied()).catch(() => showCopied());
     } else {
       try {
         const ta = document.createElement('textarea');
-        ta.value = text;
+        ta.value = t;
         ta.style.position = 'fixed';
         ta.style.left = '-9999px';
         document.body.appendChild(ta);
@@ -293,14 +276,7 @@ export default function MicroLessonCard({
 
   return (
     <article className="relative p-3 border rounded shadow-sm bg-white" aria-labelledby={`lesson-${index}-title`}>
-      <div
-        aria-hidden
-        className={
-          'absolute top-2 right-2 z-10 pointer-events-none transform transition-all duration-300 ease-in-out ' +
-          (copied ? 'opacity-100 scale-100' : 'opacity-0 scale-95')
-        }
-        style={{ WebkitBackfaceVisibility: 'hidden' }}
-      >
+      <div aria-hidden className={'absolute top-2 right-2 z-10 pointer-events-none transform transition-all duration-300 ease-in-out ' + (copied ? 'opacity-100 scale-100' : 'opacity-0 scale-95')} style={{ WebkitBackfaceVisibility: 'hidden' }}>
         <div className="bg-black/70 text-white text-xs px-2 py-1 rounded shadow" role="status">Copied!</div>
       </div>
 
@@ -322,10 +298,8 @@ export default function MicroLessonCard({
           <button
             onClick={() => {
               if (lesson.full_guide || lesson.fullGuideText) {
-                // already have guide — just toggle
                 setExpanded(e => !e);
               } else {
-                // fetch then expand
                 handleFetchExpansion();
               }
             }}
@@ -354,20 +328,11 @@ export default function MicroLessonCard({
             <IconLightbulb /> <span>{loadingHint ? 'Loading…' : 'Hint'}</span>
           </button>
 
-          <button
-            onClick={() => onCopyText(practice || tip)}
-            className="px-2 py-1 border rounded text-xs bg-gray-50 hover:bg-gray-100 flex items-center gap-2"
-            title="Copy practice text"
-          >
+          <button onClick={() => copyText(practice || tip)} className="px-2 py-1 border rounded text-xs bg-gray-50 hover:bg-gray-100 flex items-center gap-2" title="Copy practice text">
             <IconCopy /> <span>Copy</span>
           </button>
 
-          <button
-            onClick={togglePracticed}
-            className={`px-2 py-1 rounded text-xs flex items-center gap-2 ${practiced ? 'bg-green-100 border-green-200' : 'border bg-white'}`}
-            title={practiced ? 'Mark as not practiced' : 'Mark as practiced'}
-            aria-pressed={practiced}
-          >
+          <button onClick={togglePracticed} className={`px-2 py-1 rounded text-xs flex items-center gap-2 ${practiced ? 'bg-green-100 border-green-200' : 'border bg-white'}`} title={practiced ? 'Mark as not practiced' : 'Mark as practiced'} aria-pressed={practiced}>
             <IconCheck /> <span>{practiced ? 'Practiced' : 'Mark'}</span>
           </button>
         </div>
@@ -375,67 +340,17 @@ export default function MicroLessonCard({
 
       {showHint && (
         <div className="mt-3 p-2 bg-yellow-50 rounded text-xs text-gray-800">
-          {lesson.hints && lesson.hints.length > 0 ? lesson.hints[0] : (practice ? `Try this: ${practice.split('.').slice(0,1).join('.')} — focus on doing it in a single small step.` : 'Try repeating the task twice quickly, focusing on one small part at a time.')}
+          {lesson.hints && lesson.hints.length > 0 ? lesson.hints[0] : (practice ? `Try this: ${practice.split('.').slice(0,1).join('.')} — focus on a single small step.` : 'Try repeating the task twice quickly, focusing on one small part.') }
         </div>
       )}
 
       {expanded && (
         <div id={`lesson-${index}-details`} className="mt-3 border-t pt-3 text-sm text-gray-800">
-          {(() => {
-            const g = ensureGuide();
-            return (
-              <div className="space-y-3">
-                {g.fullGuideText && <div><pre className="whitespace-pre-wrap text-xs">{g.fullGuideText}</pre></div>}
-                {!g.fullGuideText && g.objective && <div><strong>Objective</strong><div className="text-xs mt-1 text-gray-700">{g.objective}</div></div>}
-                {g.why && <div><strong>Why it matters</strong><div className="text-xs mt-1 text-gray-700">{g.why}</div></div>}
-
-                {g.steps && g.steps.length > 0 && (
-                  <div>
-                    <strong>Step-by-step</strong>
-                    <ol className="mt-1 ml-4 text-xs list-decimal space-y-1">
-                      {g.steps.map((s, i) => <li key={i}>{s.replace(/^\d+\)\s*/, '')}</li>)}
-                    </ol>
-                  </div>
-                )}
-
-                {g.tailoredTip && <div><strong>Pro tip</strong><div className="text-xs mt-1 text-gray-700">{g.tailoredTip}</div></div>}
-
-                {g.routine && g.routine.length > 0 && (
-                  <div>
-                    <strong>Practice routine</strong>
-                    <ul className="mt-1 ml-4 text-xs space-y-1">
-                      {g.routine.map((r, i) => <li key={i}>{r}</li>)}
-                    </ul>
-                  </div>
-                )}
-
-                {g.timeEstimate && <div className="flex items-center gap-2 text-xs text-gray-600"><IconClock /> <span>{g.timeEstimate}</span></div>}
-
-                {example && (
-                  <div>
-                    <strong>Example output</strong>
-                    <div className="mt-1 text-xs text-gray-700">{example}</div>
-                  </div>
-                )}
-
-                {g.furtherReads && g.furtherReads.length > 0 && (
-                  <div>
-                    <strong>Further reads</strong>
-                    <ul className="mt-1 ml-4 text-xs space-y-1">
-                      {g.furtherReads.map((fr, i) => (
-                        <li key={i}><a className="inline-flex items-center gap-2" href={fr.url || fr} rel="noreferrer" target="_blank"><IconExternal /> <span className="underline">{fr.title || fr}</span></a></li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                <div className="flex gap-2 mt-2">
-                  <button onClick={() => onCopyText(g.fullGuideText)} className="px-3 py-1 border rounded text-xs">Copy Guide</button>
-                  <a href={`mailto:?subject=${encodeURIComponent('MicroSkill practice: ' + title)}&body=${encodeURIComponent((g.fullGuideText || '').substring(0, 2000))}`} className="px-3 py-1 border rounded text-xs" title="Share via email">Share</a>
-                </div>
-              </div>
-            );
-          })()}
+          <div className="md-content text-xs" dangerouslySetInnerHTML={{ __html: guideHtml || '<p>No guide available.</p>' }} />
+          <div className="flex gap-2 mt-2">
+            <button onClick={() => copyText(lesson.full_guide || lesson.fullGuideText || '')} className="px-3 py-1 border rounded text-xs">Copy Guide</button>
+            <a href={`mailto:?subject=${encodeURIComponent('MicroSkill practice: ' + title)}&body=${encodeURIComponent((lesson.full_guide || lesson.fullGuideText || '').substring(0,2000))}`} className="px-3 py-1 border rounded text-xs" title="Share via email">Share</a>
+          </div>
         </div>
       )}
     </article>

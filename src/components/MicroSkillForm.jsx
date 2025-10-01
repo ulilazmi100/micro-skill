@@ -95,7 +95,6 @@ export default function MicroSkillForm() {
   useEffect(() => {
     function onStorage(e) {
       if (!e) {
-        // some browsers may call storage event with no parameter when dispatching synthetic Event
         setPracticedSet(readPracticedSet());
         setStreak(readStreak().streak || 0);
         return;
@@ -114,11 +113,10 @@ export default function MicroSkillForm() {
   async function onGenerate() {
     setLoading(true);
     setError(null);
-    setResult(null);
+    // Note: generation replaces result (lessons) and resets practiced set
     try {
       const payload = { jobTitle, skillLevel, strengths, platform, jobDesc, provider };
       const res = await generateMicroContent(payload);
-      // res is expected to be the parsed JSON from server with micro_lessons, profile_short, profile_long, cover_message
       setResult(res);
       // reset practiced set for new lessons
       writePracticedSet(new Set());
@@ -152,14 +150,15 @@ export default function MicroSkillForm() {
     setError(null);
   }
 
+  // CLEAR now only clears inputs (jobTitle, skillLevel, strengths, platform, jobDesc)
   function clearForm() {
     setJobTitle('');
     setSkillLevel('beginner');
     setStrengths('');
     setPlatform('');
     setJobDesc('');
-    setResult(null);
     setError(null);
+    // do NOT touch result, practicedSet, or streak here
   }
 
   // export all practice routines (Markdown) and download
@@ -185,8 +184,6 @@ export default function MicroSkillForm() {
 
   // fetchSupplement wrapper to call server
   async function handleFetchSupplement({ type, lessonIndex, lesson }) {
-    // type: 'expansion' | 'hint'
-    // If lesson already has the supplement, return it immediately
     if (type === 'expansion' && (lesson.full_guide || lesson.fullGuideText)) {
       return { supplement: lesson.full_guide || lesson.fullGuideText };
     }
@@ -194,7 +191,6 @@ export default function MicroSkillForm() {
       return { supplement: lesson.hints[0] };
     }
 
-    // Call client helper that posts to the server
     try {
       const resp = await fetchSupplement({
         action: type === 'expansion' ? 'fetch_expansion' : 'fetch_hint',
@@ -207,9 +203,8 @@ export default function MicroSkillForm() {
         jobDesc,
         provider
       });
-      return resp; // { supplement: "..." }
+      return resp;
     } catch (err) {
-      // bubble up; caller will handle
       throw err;
     }
   }
@@ -217,19 +212,15 @@ export default function MicroSkillForm() {
   // Save supplement into result state (persist)
   function handleSaveSupplement(index, patch) {
     if (!result || !Array.isArray(result.micro_lessons)) return;
-    // shallow clone and replace that lesson
     const copy = JSON.parse(JSON.stringify(result));
     copy.micro_lessons[index] = Object.assign({}, copy.micro_lessons[index] || {}, patch);
     setResult(copy);
-    // Optionally we could persist supplements in localStorage if desired later
   }
 
   // mark practiced action used by UI to update streak if marking for today's date
   function onLessonPracticedToggled(markedToday) {
-    // update practiced set snapshot
     setPracticedSet(readPracticedSet());
 
-    // Update streak: if user marks practiced today and the stored streak lastDate != today, update
     const s = readStreak();
     const lastDate = s.lastDate;
     const today = todayISO(0);
@@ -237,7 +228,6 @@ export default function MicroSkillForm() {
       if (lastDate === today) {
         // already counted today
       } else {
-        // if lastDate was yesterday then increment else restart
         if (lastDate === todayISO(-1)) {
           s.streak = (s.streak || 0) + 1;
         } else {
@@ -246,7 +236,6 @@ export default function MicroSkillForm() {
         s.lastDate = today;
         writeStreak(s);
         setStreak(s.streak);
-        // write to storage to notify other windows
         try { localStorage.setItem(STREAK_KEY, JSON.stringify(s)); } catch {}
       }
     }
@@ -340,7 +329,6 @@ export default function MicroSkillForm() {
                     fetchSupplement={({ type, lessonIndex, lesson }) => handleFetchSupplement({ type, lessonIndex, lesson })}
                     onSaveSupplement={(i, patch) => handleSaveSupplement(i, patch)}
                     onPracticedToggle={(isNowPracticed) => {
-                      // Update practiced set in parent & update streak if marking for today's date
                       setPracticedSet(readPracticedSet());
                       if (isNowPracticed) onLessonPracticedToggled(true);
                     }}
