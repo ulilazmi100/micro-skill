@@ -63,9 +63,15 @@ Lesson:
 ${lessonSummary}
 
 Instructions:
-- Produce a readable full guide with sections: Objective, Why it matters, Steps (3-6 numbered steps), Pro tip (single short paragraph), Practice routine (3 bullet steps), Time estimate, and Example output.
+- Produce a readable full guide with sections: Objective, Why it matters, Steps (clear numbered steps), Pro tip (single short paragraph), Practice routine (3 bullet steps), Time estimate, and Example output.
 - Keep the guide practical and focused; aim for ~200-500 words.
-- Return only plain text (no JSON, no code fences).`;
+- At the very end include a "Further reads" section with 2–3 named links.
+      - If you can produce direct URLs to helpful articles/resources, include them.
+      - If you cannot produce reliable direct URLs, instead provide Google-search links using relevant keywords.
+        Example format: [Minimal reproducible example — search](https://www.google.com/search?q=minimal+reproducible+example+frontend)
+      - Name each link succinctly (e.g., "Minimal reproducible example — search", "Testing React components — search").
+- Return only the Markdown text for the expansion (no surrounding JSON, no code fences, no commentary) for headings use H2, H3 or smaller.
+- Ensure the Markdown is well-formed so the client can render headings (H2, H3 or smaller), lists, bold/italic, and links correctly.`;
 }
 
 // New: build prompt for a short hint for a single micro-lesson.
