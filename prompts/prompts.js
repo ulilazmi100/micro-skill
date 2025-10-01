@@ -38,8 +38,63 @@ Constraints recap: lesson tip ≤45 words; practice_task 8–12 words; example_o
 Tone: friendly, confident, action-focused. No fluff. Use active verbs.`;
 }
 
+// New: build prompt to produce a full expansion/guide for a single micro-lesson.
+// The assistant should return plain text (no JSON) that will be used by the client as the "full guide".
+function buildExpansionPrompt({ jobTitle, skillLevel, strengths, platform, jobDesc, lesson }) {
+  // lesson contains fields such as title, tip, practice_task, example_output, difficulty, hints (optional)
+  const lessonSummary = [
+    lesson.title ? `Title: ${lesson.title}` : '',
+    lesson.difficulty ? `Difficulty: ${lesson.difficulty}` : '',
+    lesson.tip ? `Tip: ${lesson.tip}` : '',
+    lesson.practice_task ? `Practice task: ${lesson.practice_task}` : '',
+    lesson.example_output ? `Example output: ${lesson.example_output}` : ''
+  ].filter(Boolean).join('\n');
+
+  return `You are MicroSkill. Produce a concise "full guide" (plain text) for a single micro-lesson.
+
+Context:
+JOB_TITLE: ${jobTitle}
+SKILL_LEVEL: ${skillLevel}
+STRENGTHS: ${strengths}
+PLATFORM: ${platform}
+JOB_DESCRIPTION: ${jobDesc}
+
+Lesson:
+${lessonSummary}
+
+Instructions:
+- Produce a readable full guide with sections: Objective, Why it matters, Steps (3-6 numbered steps), Pro tip (single short paragraph), Practice routine (3 bullet steps), Time estimate, and Example output.
+- Keep the guide practical and focused; aim for ~200-500 words.
+- Return only plain text (no JSON, no code fences).`;
+}
+
+// New: build prompt for a short hint for a single micro-lesson.
+// Return a short hint (one or two sentences, < 25 words).
+function buildHintPrompt({ jobTitle, skillLevel, strengths, platform, jobDesc, lesson }) {
+  const lessonSummary = [
+    lesson.title ? `Title: ${lesson.title}` : '',
+    lesson.practice_task ? `Practice task: ${lesson.practice_task}` : ''
+  ].filter(Boolean).join('\n');
+
+  return `You are MicroSkill. Produce one short, actionable hint for the lesson below.
+
+Context:
+JOB_TITLE: ${jobTitle}
+JOB_DESCRIPTION: ${jobDesc}
+
+Lesson:
+${lessonSummary}
+
+Instructions:
+- Return a concise hint: 1–2 short sentences, under 25 words.
+- Focus on a tiny, immediate tip the user can apply in one focused attempt.
+- Return only plain text (no JSON, no code fences).`;
+}
+
 // Export CommonJS
 module.exports = {
   SYSTEM_PROMPT,
-  buildUserPrompt
+  buildUserPrompt,
+  buildExpansionPrompt,
+  buildHintPrompt
 };

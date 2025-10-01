@@ -1,7 +1,7 @@
 // src/components/MicroSkillForm.jsx
 import React, { useState, useEffect } from 'react';
 import MicroLessonCard from './MicroLessonCard';
-import { generateMicroContent } from '../utils/api';
+import { generateMicroContent, fetchSupplement } from '../utils/api';
 
 // LocalStorage keys
 const PRACTICED_KEY = 'micro_practiced_v1';
@@ -60,7 +60,7 @@ function buildGuideText(lesson, idx) {
   const practice = lesson.practice_task || '';
   const example = lesson.example_output || '';
   const difficulty = lesson.difficulty || 'unknown';
-  const guide = lesson.full_guide || (`Objective: ${title}\n\nTip: ${tip}\n\nPractice task: ${practice}\n\nExample output: ${example}\n\nDifficulty: ${difficulty}\n`);
+  const guide = lesson.full_guide || lesson.fullGuideText || (`Objective: ${title}\n\nTip: ${tip}\n\nPractice task: ${practice}\n\nExample output: ${example}\n\nDifficulty: ${difficulty}\n`);
   // sanitize and ensure newlines
   return `## ${idx + 1}. ${title}\n\n${guide}\n`;
 }
@@ -91,9 +91,15 @@ export default function MicroSkillForm() {
     setStreak(readStreak().streak || 0);
   }, []);
 
-  // Called by child card via localStorage changes — convenient tiny pub/sub: watch storage event
+  // storage event listener for cross-tab and synthetic events
   useEffect(() => {
     function onStorage(e) {
+      if (!e) {
+        // some browsers may call storage event with no parameter when dispatching synthetic Event
+        setPracticedSet(readPracticedSet());
+        setStreak(readStreak().streak || 0);
+        return;
+      }
       if (e.key === PRACTICED_KEY) {
         setPracticedSet(readPracticedSet());
       }
@@ -112,16 +118,19 @@ export default function MicroSkillForm() {
     try {
       const payload = { jobTitle, skillLevel, strengths, platform, jobDesc, provider };
       const res = await generateMicroContent(payload);
+      // res is expected to be the parsed JSON from server with micro_lessons, profile_short, profile_long, cover_message
       setResult(res);
-      // reset practiced set for new lessons (stop marking previously practiced)
+      // reset practiced set for new lessons
       writePracticedSet(new Set());
       setPracticedSet(new Set());
     } catch (err) {
       console.error(err);
-      if (err && typeof err === 'object' && err.error) {
-        setError(typeof err.error === 'string' ? err.error : JSON.stringify(err.error));
+      if (err && typeof err === 'object' && err.message) {
+        setError(err.message);
+      } else if (err && typeof err === 'string') {
+        setError(err);
       } else {
-        setError(err.message || 'Failed to generate');
+        setError('Failed to generate');
       }
     } finally {
       setLoading(false);
@@ -153,11 +162,6 @@ export default function MicroSkillForm() {
     setError(null);
   }
 
-  // progress calculation
-  const totalLessons = Array.isArray(result?.micro_lessons) ? result.micro_lessons.length : 0;
-  const practicedCount = practicedSet.size;
-  const progressPct = totalLessons > 0 ? Math.round((practicedCount / totalLessons) * 100) : 0;
-
   // export all practice routines (Markdown) and download
   function exportAll() {
     if (!result || !Array.isArray(result.micro_lessons)) return;
@@ -177,6 +181,47 @@ export default function MicroSkillForm() {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  }
+
+  // fetchSupplement wrapper to call server
+  async function handleFetchSupplement({ type, lessonIndex, lesson }) {
+    // type: 'expansion' | 'hint'
+    // If lesson already has the supplement, return it immediately
+    if (type === 'expansion' && (lesson.full_guide || lesson.fullGuideText)) {
+      return { supplement: lesson.full_guide || lesson.fullGuideText };
+    }
+    if (type === 'hint' && lesson.hints && lesson.hints.length > 0 && lesson.hints[0]) {
+      return { supplement: lesson.hints[0] };
+    }
+
+    // Call client helper that posts to the server
+    try {
+      const resp = await fetchSupplement({
+        action: type === 'expansion' ? 'fetch_expansion' : 'fetch_hint',
+        lessonIndex,
+        lesson,
+        jobTitle,
+        skillLevel,
+        strengths,
+        platform,
+        jobDesc,
+        provider
+      });
+      return resp; // { supplement: "..." }
+    } catch (err) {
+      // bubble up; caller will handle
+      throw err;
+    }
+  }
+
+  // Save supplement into result state (persist)
+  function handleSaveSupplement(index, patch) {
+    if (!result || !Array.isArray(result.micro_lessons)) return;
+    // shallow clone and replace that lesson
+    const copy = JSON.parse(JSON.stringify(result));
+    copy.micro_lessons[index] = Object.assign({}, copy.micro_lessons[index] || {}, patch);
+    setResult(copy);
+    // Optionally we could persist supplements in localStorage if desired later
   }
 
   // mark practiced action used by UI to update streak if marking for today's date
@@ -207,6 +252,11 @@ export default function MicroSkillForm() {
     }
   }
 
+  // progress calculation
+  const totalLessons = Array.isArray(result?.micro_lessons) ? result.micro_lessons.length : 0;
+  const practicedCount = practicedSet.size;
+  const progressPct = totalLessons > 0 ? Math.round((practicedCount / totalLessons) * 100) : 0;
+
   return (
     <div>
       {/* Gamification header */}
@@ -226,7 +276,7 @@ export default function MicroSkillForm() {
         </div>
       </div>
 
-      {/* Form (same as before) */}
+      {/* Form */}
       <div className="grid grid-cols-1 gap-3 mb-4">
         <input className="p-2 border rounded" value={jobTitle} onChange={e => setJobTitle(e.target.value)} placeholder="Job Title (e.g. Frontend bug fix)" />
         <select className="p-2 border rounded" value={skillLevel} onChange={e => setSkillLevel(e.target.value)}>
@@ -287,12 +337,11 @@ export default function MicroSkillForm() {
                     key={idx}
                     index={idx}
                     lesson={m}
+                    fetchSupplement={({ type, lessonIndex, lesson }) => handleFetchSupplement({ type, lessonIndex, lesson })}
+                    onSaveSupplement={(i, patch) => handleSaveSupplement(i, patch)}
                     onPracticedToggle={(isNowPracticed) => {
-                      // Update practiced set in parent & update streak if it's newly practiced today
-                      const setNow = readPracticedSet();
-                      // make sure it's in localStorage already (child toggled it)
-                      setPracticedSet(setNow);
-                      // notify for streak update
+                      // Update practiced set in parent & update streak if marking for today's date
+                      setPracticedSet(readPracticedSet());
                       if (isNowPracticed) onLessonPracticedToggled(true);
                     }}
                   />

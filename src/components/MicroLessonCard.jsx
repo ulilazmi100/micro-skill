@@ -2,12 +2,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 /**
- * MicroLessonCard (copy-aware + "Copied!" toast with fade-in/out animation)
+ * MicroLessonCard (merged)
  *
- * - Copies reflect the visible state (difficulty, status, hint, expanded guide).
- * - "Copied!" toast is semi-transparent and uses a short fade + scale animation.
- *
- * No external icon dependencies (inline SVGs).
+ * Props:
+ * - lesson: lesson object
+ * - index: number
+ * - fetchSupplement: async function({ type, lessonIndex, lesson }) => { supplement: string }
+ * - onSaveSupplement: function(index, patch) -> should merge patch into the lesson in parent state
+ * - onPracticedToggle: optional callback (isNowPracticed)
  */
 
 const STORAGE_KEY = 'micro_practiced_v1';
@@ -28,10 +30,7 @@ function writePracticedSet(set) {
   try {
     const arr = Array.from(set);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
-    // Dispatch a storage event-like notification for listeners
-    try {
-      window.dispatchEvent(new Event('storage'));
-    } catch (e) {}
+    try { window.dispatchEvent(new Event('storage')); } catch (e) {}
   } catch (e) {
     console.warn('writePracticedSet failed', e);
   }
@@ -124,13 +123,21 @@ function IconCheck({ size = 14 }) { return (<svg width={size} height={size} view
 function IconClock({ size = 14 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.6" /><path d="M12 8v5l3 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>); }
 function IconExternal({ size = 12 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none"><path d="M14 3h7v7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /><path d="M10 14L21 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /><path d="M21 21H3V3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>); }
 
-/* ---------- component ---------- */
-
-export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedToggle = () => {} }) {
+export default function MicroLessonCard({
+  lesson = {},
+  index = 0,
+  fetchSupplement = null,
+  onSaveSupplement = null,
+  onPracticedToggle = () => {}
+}) {
   const [expanded, setExpanded] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const [practiced, setPracticed] = useState(false);
   const [guide, setGuide] = useState(null);
+
+  // loading states for fetching supplement
+  const [loadingExpansion, setLoadingExpansion] = useState(false);
+  const [loadingHint, setLoadingHint] = useState(false);
 
   // toast state and timer ref
   const [copied, setCopied] = useState(false);
@@ -148,18 +155,84 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
 
   function ensureGuide() {
     if (guide) return guide;
-    const g = lesson.full_guide ? { fullGuideText: lesson.full_guide } : buildExpandedGuide(lesson, index);
+    // priority: lesson.full_guide (server-supplied) -> lesson.fullGuideText (older name) -> build client-side
+    const g = lesson.full_guide ? { fullGuideText: lesson.full_guide } : (lesson.fullGuideText ? { fullGuideText: lesson.fullGuideText } : buildExpandedGuide(lesson, index));
     setGuide(g);
     return g;
   }
 
-  function toggleExpanded() {
-    if (!expanded) ensureGuide();
-    setExpanded(!expanded);
+  async function handleFetchExpansion() {
+    // If we already have full_guide, just expand (no LLM)
+    if (lesson.full_guide || lesson.fullGuideText) {
+      setExpanded(true);
+      ensureGuide();
+      return;
+    }
+    // otherwise fetch from server/provider via fetchSupplement prop
+    if (!fetchSupplement || typeof fetchSupplement !== 'function') {
+      // fallback to client-side generation
+      const g = buildExpandedGuide(lesson, index);
+      setGuide(g);
+      setExpanded(true);
+      // optionally persist via onSaveSupplement
+      try { onSaveSupplement && onSaveSupplement(index, { full_guide: g.fullGuideText }); } catch (e) {}
+      return;
+    }
+
+    try {
+      setLoadingExpansion(true);
+      const resp = await fetchSupplement({ type: 'expansion', lessonIndex: index, lesson });
+      const text = resp && (resp.supplement || resp) ? (resp.supplement || resp) : '';
+      if (text && text.trim().length > 0) {
+        // save into lesson via callback so parent state is updated
+        onSaveSupplement && onSaveSupplement(index, { full_guide: text });
+        setGuide({ fullGuideText: text, objective: null }); // guide will be shown from fullGuideText
+      } else {
+        // fallback: client-side guide
+        const g = buildExpandedGuide(lesson, index);
+        onSaveSupplement && onSaveSupplement(index, { full_guide: g.fullGuideText });
+        setGuide(g);
+      }
+      setExpanded(true);
+    } catch (err) {
+      console.error('fetch expansion failed', err);
+      const g = buildExpandedGuide(lesson, index);
+      setGuide(g);
+      setExpanded(true);
+    } finally {
+      setLoadingExpansion(false);
+    }
   }
 
-  function toggleHint() {
-    setShowHint(!showHint);
+  async function handleFetchHint() {
+    // if hint already exists
+    if (lesson.hints && lesson.hints.length > 0 && lesson.hints[0]) {
+      setShowHint(v => !v);
+      return;
+    }
+    if (!fetchSupplement || typeof fetchSupplement !== 'function') {
+      // fallback hint
+      setShowHint(true);
+      return;
+    }
+    try {
+      setLoadingHint(true);
+      const resp = await fetchSupplement({ type: 'hint', lessonIndex: index, lesson });
+      const text = resp && (resp.supplement || resp) ? (resp.supplement || resp) : '';
+      if (text && text.trim().length > 0) {
+        // persist
+        onSaveSupplement && onSaveSupplement(index, { hints: [text] });
+        // show
+        setShowHint(true);
+      } else {
+        setShowHint(true);
+      }
+    } catch (err) {
+      console.error('fetch hint failed', err);
+      setShowHint(true);
+    } finally {
+      setLoadingHint(false);
+    }
   }
 
   function togglePracticed() {
@@ -186,96 +259,17 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
     toastTimerRef.current = setTimeout(() => {
       setCopied(false);
       toastTimerRef.current = null;
-    }, 1800);
+    }, 1600);
   }
 
-  // Build copy text that exactly mirrors what the user sees (status, difficulty, hint, expanded guide)
-  function buildCopyText(context = 'practice') {
-    const title = lesson.title || `Lesson ${index + 1}`;
-    const difficulty = lesson.difficulty || 'Beginner';
-    const status = practiced ? 'Practiced' : 'Not practiced';
-    const tip = lesson.tip || '';
-    const practice = lesson.practice_task || '';
-    const example = lesson.example_output || '';
-    const hintText = (lesson.hints && lesson.hints.length > 0) ? lesson.hints[0] : (practice ? `Try: ${practice.split('.').slice(0,1).join('.')} — keep it minimal.` : '');
-
-    const lines = [];
-    lines.push(`${index + 1}. ${title}`);
-    lines.push(`Difficulty: ${difficulty}`);
-    lines.push(`Status: ${status}`);
-    lines.push('');
-    if (tip) lines.push(`Tip: ${tip}`);
-    if (practice) lines.push(`Practice task: ${practice}`);
-    if (example) lines.push(`Example output: ${example}`);
-    lines.push('');
-
-    if (showHint && hintText) {
-      lines.push('Hint:');
-      lines.push(hintText);
-      lines.push('');
-    }
-
-    if (expanded || context === 'guide') {
-      const g = ensureGuide();
-      if (g.fullGuideText) {
-        lines.push('---');
-        lines.push('Full Guide:');
-        lines.push(g.fullGuideText);
-        lines.push('---');
-      } else {
-        if (g.objective) {
-          lines.push('Objective:');
-          lines.push(g.objective);
-          lines.push('');
-        }
-        if (g.why) {
-          lines.push('Why it matters:');
-          lines.push(g.why);
-          lines.push('');
-        }
-        if (g.steps && g.steps.length > 0) {
-          lines.push('Steps:');
-          g.steps.forEach(s => lines.push(`- ${s.replace(/^\d+\)\s*/, '')}`));
-          lines.push('');
-        }
-        if (g.tailoredTip) {
-          lines.push('Pro tip:');
-          lines.push(g.tailoredTip);
-          lines.push('');
-        }
-        if (g.routine && g.routine.length > 0) {
-          lines.push('Practice routine:');
-          g.routine.forEach(r => lines.push(`- ${r}`));
-          lines.push('');
-        }
-        if (g.timeEstimate) {
-          lines.push(`Time estimate: ${g.timeEstimate}`);
-          lines.push('');
-        }
-        if (g.furtherReads && g.furtherReads.length > 0) {
-          lines.push('Further reads:');
-          g.furtherReads.forEach(fr => lines.push(`- ${fr.title || fr} — ${fr.url || fr}`));
-          lines.push('');
-        }
-      }
-    }
-
-    lines.push(`(copied from MicroSkill • ${new Date().toLocaleString()})`);
-
-    return lines.join('\n');
-  }
-
-  // copy visible practice snapshot
-  function copyCurrentPractice() {
-    const txt = buildCopyText('practice');
-    if (!txt) { showCopied(); return; }
-    // attempt copy and always show toast after attempt
+  function onCopyText(text) {
+    if (!text) { showCopied(); return; }
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(txt).finally(() => showCopied());
+      navigator.clipboard.writeText(text).then(() => showCopied()).catch(() => showCopied());
     } else {
       try {
         const ta = document.createElement('textarea');
-        ta.value = txt;
+        ta.value = text;
         ta.style.position = 'fixed';
         ta.style.left = '-9999px';
         document.body.appendChild(ta);
@@ -284,31 +278,6 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
         document.body.removeChild(ta);
         showCopied();
       } catch (e) {
-        console.warn('fallback copy failed', e);
-        showCopied();
-      }
-    }
-  }
-
-  // copy the full guide (explicit)
-  function copyGuide() {
-    const txt = buildCopyText('guide');
-    if (!txt) { showCopied(); return; }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(txt).finally(() => showCopied());
-    } else {
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = txt;
-        ta.style.position = 'fixed';
-        ta.style.left = '-9999px';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        showCopied();
-      } catch (e) {
-        console.warn('fallback copy failed', e);
         showCopied();
       }
     }
@@ -324,7 +293,6 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
 
   return (
     <article className="relative p-3 border rounded shadow-sm bg-white" aria-labelledby={`lesson-${index}-title`}>
-      {/* animated, semi-transparent copied toast */}
       <div
         aria-hidden
         className={
@@ -352,28 +320,44 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
 
         <div className="flex flex-col items-end gap-2">
           <button
-            onClick={toggleExpanded}
+            onClick={() => {
+              if (lesson.full_guide || lesson.fullGuideText) {
+                // already have guide — just toggle
+                setExpanded(e => !e);
+              } else {
+                // fetch then expand
+                handleFetchExpansion();
+              }
+            }}
             className="flex items-center gap-2 px-2 py-1 border rounded text-xs bg-gray-50 hover:bg-gray-100"
             aria-expanded={expanded}
             aria-controls={`lesson-${index}-details`}
-            title={expanded ? 'Collapse' : 'Expand for full guide'}
+            title={expanded ? 'Collapse' : (loadingExpansion ? 'Fetching...' : 'Expand for full guide')}
+            disabled={loadingExpansion}
           >
-            {expanded ? <IconChevronUp /> : <IconChevronDown />} <span>{expanded ? 'Less' : 'Expand'}</span>
+            {expanded ? <IconChevronUp /> : <IconChevronDown />} <span>{expanded ? 'Less' : (loadingExpansion ? 'Loading…' : 'Expand')}</span>
           </button>
 
           <button
-            onClick={toggleHint}
+            onClick={() => {
+              if (lesson.hints && lesson.hints.length > 0 && lesson.hints[0]) {
+                setShowHint(s => !s);
+              } else {
+                handleFetchHint();
+              }
+            }}
             className="px-2 py-1 border rounded text-xs bg-yellow-50 hover:bg-yellow-100 flex items-center gap-2"
-            title="Show / hide hint"
+            title={showHint ? 'Hide hint' : (loadingHint ? 'Fetching hint...' : 'Show hint')}
             aria-pressed={showHint}
+            disabled={loadingHint}
           >
-            <IconLightbulb /> <span>Hint</span>
+            <IconLightbulb /> <span>{loadingHint ? 'Loading…' : 'Hint'}</span>
           </button>
 
           <button
-            onClick={copyCurrentPractice}
+            onClick={() => onCopyText(practice || tip)}
             className="px-2 py-1 border rounded text-xs bg-gray-50 hover:bg-gray-100 flex items-center gap-2"
-            title="Copy this micro-lesson (visible content)"
+            title="Copy practice text"
           >
             <IconCopy /> <span>Copy</span>
           </button>
@@ -391,7 +375,7 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
 
       {showHint && (
         <div className="mt-3 p-2 bg-yellow-50 rounded text-xs text-gray-800">
-          {lesson.hints && lesson.hints.length > 0 ? lesson.hints[0] : (practice ? `Try: ${practice.split('.').slice(0,1).join('.')} — keep it minimal.` : 'Try repeating the task twice focusing on one tiny substep.')}
+          {lesson.hints && lesson.hints.length > 0 ? lesson.hints[0] : (practice ? `Try this: ${practice.split('.').slice(0,1).join('.')} — focus on doing it in a single small step.` : 'Try repeating the task twice quickly, focusing on one small part at a time.')}
         </div>
       )}
 
@@ -401,7 +385,8 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
             const g = ensureGuide();
             return (
               <div className="space-y-3">
-                {g.objective && <div><strong>Objective</strong><div className="text-xs mt-1 text-gray-700">{g.objective}</div></div>}
+                {g.fullGuideText && <div><pre className="whitespace-pre-wrap text-xs">{g.fullGuideText}</pre></div>}
+                {!g.fullGuideText && g.objective && <div><strong>Objective</strong><div className="text-xs mt-1 text-gray-700">{g.objective}</div></div>}
                 {g.why && <div><strong>Why it matters</strong><div className="text-xs mt-1 text-gray-700">{g.why}</div></div>}
 
                 {g.steps && g.steps.length > 0 && (
@@ -426,10 +411,10 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
 
                 {g.timeEstimate && <div className="flex items-center gap-2 text-xs text-gray-600"><IconClock /> <span>{g.timeEstimate}</span></div>}
 
-                {lesson.example_output && (
+                {example && (
                   <div>
                     <strong>Example output</strong>
-                    <div className="mt-1 text-xs text-gray-700">{lesson.example_output}</div>
+                    <div className="mt-1 text-xs text-gray-700">{example}</div>
                   </div>
                 )}
 
@@ -445,7 +430,7 @@ export default function MicroLessonCard({ lesson = {}, index = 0, onPracticedTog
                 )}
 
                 <div className="flex gap-2 mt-2">
-                  <button onClick={copyGuide} className="px-3 py-1 border rounded text-xs">Copy Guide (full)</button>
+                  <button onClick={() => onCopyText(g.fullGuideText)} className="px-3 py-1 border rounded text-xs">Copy Guide</button>
                   <a href={`mailto:?subject=${encodeURIComponent('MicroSkill practice: ' + title)}&body=${encodeURIComponent((g.fullGuideText || '').substring(0, 2000))}`} className="px-3 py-1 border rounded text-xs" title="Share via email">Share</a>
                 </div>
               </div>
