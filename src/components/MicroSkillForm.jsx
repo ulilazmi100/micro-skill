@@ -323,7 +323,7 @@ export default function MicroSkillForm() {
               {Array.isArray(result.micro_lessons) && result.micro_lessons.length > 0 ? (
                 result.micro_lessons.map((m, idx) => (
                   <MicroLessonCard
-                    key={idx}
+                    key={m.title ? `${m.title.slice(0,30).replace(/\s+/g,'-')}-${idx}` : idx}
                     index={idx}
                     lesson={m}
                     fetchSupplement={({ type, lessonIndex, lesson }) => handleFetchSupplement({ type, lessonIndex, lesson })}

@@ -59,7 +59,7 @@ function mdToHtml(md) {
     // escape HTML first
     let t = escapeHtml(text);
     // links: [text](url)
-    t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+    t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer noopener">$1</a>');
     // bold **text**
     t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     // italic *text*
@@ -122,7 +122,6 @@ function IconLightbulb({ size = 14 }) { return (<svg width={size} height={size} 
 function IconCopy({ size = 14 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.6" /><path d="M5 15V7a2 2 0 012-2h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>); }
 function IconCheck({ size = 14 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>); }
 function IconClock({ size = 14 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.6" /><path d="M12 8v5l3 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>); }
-function IconExternal({ size = 12 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none"><path d="M14 3h7v7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /><path d="M10 14L21 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /><path d="M21 21H3V3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>); }
 
 export default function MicroLessonCard({
   lesson = {},
@@ -270,7 +269,8 @@ export default function MicroLessonCard({
   const tip = lesson.tip || '';
   const practice = lesson.practice_task || '';
   const example = lesson.example_output || '';
-  const compactTip = tip.length > 140 ? tip.slice(0, 137) + '…' : tip;
+  // no truncation here — show full tip, allow wrapping
+  const compactTip = tip;
   const difficulty = (lesson.difficulty || 'Beginner').toLowerCase();
   const diffClass = difficulty === 'experienced' ? 'bg-red-100 text-red-800' : (difficulty === 'intermediate' ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800');
 
@@ -287,7 +287,8 @@ export default function MicroLessonCard({
             <span className={`text-xs px-2 py-0.5 rounded ${diffClass}`}>{lesson.difficulty || 'Beginner'}</span>
           </div>
 
-          <p className="text-xs text-gray-600 mt-1">{compactTip || <em className="text-gray-400">No tip provided</em>}</p>
+          {/* show full tip, allow wrapping */}
+          <p className="text-xs text-gray-600 mt-1 whitespace-pre-wrap break-words">{compactTip || <em className="text-gray-400">No tip provided</em>}</p>
 
           <div className="mt-2 text-xs text-gray-700"><strong>Practice:</strong> {practice || <span className="text-gray-400">—</span>}
             {example ? <span className="ml-3">• <em>{example}</em></span> : null}
