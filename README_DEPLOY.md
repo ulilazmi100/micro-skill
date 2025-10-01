@@ -108,7 +108,7 @@ Gemini is accessed via the Google Generative Language API (AI Studio / Vertex AI
 1. Visit [https://studio.google.ai/](https://studio.google.ai/) and sign in with your Google account.
 2. Look for **API Keys** or **Credentials** (UI changes over time). Create a new API key.
 3. Add this key to your deployment env as `GEMINI_API_KEY`.
-4. Use a model that your account can access — try `gemini-2.5-flash` or `gemini-1.5-flash`. If you get a 404 or permission error, try `gemini-1.5-flash` or check Google Cloud/Vertex AI console for access and billing.
+4. Use a model that your account can access — try `gemini-2.5-flash` or `gemini-1.5-flash`. If you get a 404 or permission error, try `gemini-2.5-flash` or check Google Cloud/Vertex AI console for access and billing.
 5. If model access requires OAuth/service-account/Vertex-setup rather than an API key, follow Google docs to configure a service account and use server-side authentication accordingly.
 
 **Important**: Gemini endpoints sometimes respond with different JSON shapes. `lib/aiClient.js` contains layered parsing and logging to help you inspect raw provider responses (the code logs Gemini body and status).

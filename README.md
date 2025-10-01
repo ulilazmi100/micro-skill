@@ -1,66 +1,85 @@
 # MicroSkill — 1-Minute MicroMentor
 
-MicroSkill is a tiny, focused PWA-like single-page app that turns a pasted gig/job description into:
-- **5 micro-lessons** (actionable micro-tasks with practice tasks + example output),
-- **2 profile blurbs** (short + long),
-- **1 concise cover message** tuned for the job.
+MicroSkill turns a pasted gig/job description into a concise practice pack for gig workers:
+**5 micro-lessons** (small actionable tasks with practice prompts + example outputs), **2 profile blurbs** (short + long), and **1 cover message** tuned to the job description. Built as a tiny React + Vite app with serverless wrappers that delegate to OpenAI, Hugging Face, or Gemini.
 
-Built with React + Vite (frontend) and a small serverless API that delegates to OpenAI, Hugging Face or **Gemini (Google)**. The AI logic is centralized in `lib/aiClient.js` (single source of truth) and the prompts are centralized in `prompts/prompts.js`.
-
-This repo is intentionally tiny and battle-ready for hackathons — cheap to run, easy to deploy.
+This README is practical: run locally, test offline with `DEMO_MODE`, deploy to Vercel/Netlify, and understand common failure modes + fixes.
 
 ---
 
-## What’s new / why it’s safe to use
-- **Single AI client (`lib/aiClient.js`)** — all provider logic and the demo fixture live here so behavior is identical across local, Netlify, and Vercel.
-- **Single prompt source (`prompts/prompts.js`)** — change this file to tune the system/user prompt for all environments.
-- **DEMO_MODE**: toggle `DEMO_MODE=true` to run fully offline canned responses (used by smoke-test).
-- **Smoke test**: `lib/aiClient.test.js` starts a local server in DEMO mode and validates the JSON shape automatically.
-- **Robust parsing & logging**: the server returns meaningful HTTP status codes and errors (so the frontend can surface friendly error messages), while server logs retain raw provider responses for debugging.
+## Highlights / Why this repo is useful
+
+* **Tiny and deployable** — React + Vite frontend and thin serverless wrappers for Netlify / Vercel (same AI client).
+* **Single source of truth** for AI behavior: `lib/aiClient.js` (providers + demo fixture).
+* **Single prompt source**: `prompts/prompts.js` — change this to tune model behavior everywhere.
+* **Safe offline demo**: set `DEMO_MODE=true` for deterministic output (used by the smoke test).
+* **Smoke test**: `npm run test:smoke` validates the local API + demo fixture.
 
 ---
 
-## Quick start (local)
+## Quick file map (important files)
 
-1. Clone or copy the repository.
-2. Copy example env and edit keys:
-   ```bash
-   cp .env.example .env
-   # Then edit .env with your keys (or set DEMO_MODE=true for offline mode)
-````
+* `src/` — React app (Vite, Tailwind)
 
-3. Install dependencies:
+  * `src/components/MicroSkillForm.jsx` — main form + UI
+  * `src/components/MicroLessonCard.jsx` — lesson card + expansion/hint fetching
+  * `src/utils/api.js` — frontend → function request helpers
+* `prompts/` — prompts and demo fixture
 
-   ```bash
-   npm install
-   ```
-4. Start the local API (the serverless adapter that the frontend will call):
+  * `prompts/prompts.js` — system & builder prompts (JSON constraints)
+  * `prompts/demo_fixture.js` — canned demo response (DEMO_MODE)
+* `lib/aiClient.js` — unified AI client (OpenAI / HuggingFace / Gemini + parsing + demo)
+* Server wrappers:
 
-   ```bash
-   npm run start:api
-   # by default listens on http://localhost:5174/api/generate
-   ```
-5. Start the frontend (Vite):
-
-   ```bash
-   npm run dev
-   # open http://localhost:5173
-   ```
-
-If you want to skip API keys entirely for quick testing, set `DEMO_MODE=true` in `.env`. Demo output is returned from `lib/aiClient.js` (`DEMO_FIXTURE`) and is deterministic.
+  * `local-api-server.js` — local Express wrapper
+  * `api/generate.js` — Vercel serverless wrapper
+  * `netlify/functions/generate.js` — Netlify wrapper
+* `lib/aiClient.test.js` — smoke test that spawns `local-api-server.js` with `DEMO_MODE=true`
 
 ---
 
-## Run the smoke test (recommended before demo/video)
+## Quick Start (local)
 
-This test verifies the entire request -> response path using the demo fixture.
+1. Clone repo and install:
 
 ```bash
-# runs lib/aiClient.test.js which spawns the local server in DEMO_MODE
+git clone <your-repo>
+cd micro-skill
+npm install
+```
+
+2. Copy example environment file:
+
+```bash
+cp .env.example .env
+```
+
+3. For quick offline testing (no API keys), set `DEMO_MODE=true` in `.env` and also:
+
+```
+VITE_DEMO_MODE=true
+```
+
+4. Start the local API and frontend in two terminals:
+
+```bash
+npm run start:api   # local serverless adapter: http://localhost:5174/api/generate
+npm run dev         # frontend: http://localhost:5173
+```
+
+5. Open the app in the browser (default: `http://localhost:5173`), paste a job description, choose a provider (or use demo), and click **Generate**.
+
+---
+
+## Smoke test (recommended before sharing/demo)
+
+The repo includes a smoke test that runs the local API in demo mode and validates the JSON shape.
+
+```bash
 npm run test:smoke
 ```
 
-Expected output:
+Expected brief output (if everything OK):
 
 ```
 [server] Local API server listening at http://localhost:5174/api/generate
@@ -69,57 +88,145 @@ SMOKE TEST SUCCESS: Demo response valid.
 
 ---
 
-## Scripts in package.json
+## Environment variables
 
-* `npm run dev` — start frontend (Vite)
-* `npm run start:api` — start local API server (`local-api-server.js`)
-* `npm run test:smoke` — run smoke test (spawns server with `DEMO_MODE=true` and validates output)
-* `npm run build` — build frontend (Vite) for production
-
-(If you add CI, `npm run test:smoke` is useful as a quick health-check job.)
-
----
-
-## Where demo output lives (important)
-
-The canned demo fixture used when `DEMO_MODE=true` lives in:
+**Server-side (do not commit):**
 
 ```
-lib/aiClient.js  -> DEMO_FIXTURE
+OPENAI_API_KEY=sk-...
+HUGGINGFACE_API_KEY=hf-...
+GEMINI_API_KEY=...
+HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3
+GEMINI_MODEL=gemini-2.5-flash
+OPENAI_MODEL=gpt-3.5-turbo
+DEFAULT_PROVIDER=openai
+DEMO_MODE=false
+LOCAL_API_PORT=5174      # optional override for local server
 ```
 
-This single fixture is returned by the shared AI client for **all** wrappers (local, Netlify, Vercel). That guarantees identical demo behavior across environments.
+**Client-side (Vite — prefix with `VITE_`):**
+
+```
+VITE_DEFAULT_PROVIDER=openai
+VITE_FUNCTION_PATH=/api/generate       # Vercel default
+# On Netlify: VITE_FUNCTION_PATH=/.netlify/functions/generate
+VITE_DEMO_MODE=false
+```
 
 ---
 
-## How to use provider selection
+## How generation works (overview)
 
-* From the frontend you can choose which provider to ask (OpenAI, HF, Gemini) by sending `provider: "openai"|"huggingface"|"gemini"` in the POST body. The server will use `DEFAULT_PROVIDER` from `.env` if none supplied.
-* The server-side environment variables determine the provider keys and model names. See `.env.example` for defaults.
+1. Frontend sends a POST to `FUNCTION_PATH` (`/api/generate` by default) with `{ jobTitle, skillLevel, strengths, platform, jobDesc, provider }`.
+2. Server wrapper builds the prompt using `prompts/prompts.js` and passes it to `lib/aiClient.js`.
+3. `lib/aiClient.js` calls the selected provider (OpenAI, HF, or Gemini). In `DEMO_MODE=true` it returns the canned `prompts/demo_fixture.js`.
+4. Wrapper returns the parsed JSON to the frontend; expansions/hints are fetched on-demand via `action: 'fetch_expansion'` / `'fetch_hint'`.
+
+**Important:** `prompts/prompts.js` expects perfectly-formed JSON from the model (strict shape). Demo fixture provides that shape deterministically.
 
 ---
 
-## Quick troubleshooting (most common issues)
+## Common errors & how to debug
 
-* **No micro-lessons returned or parse error**
+* **API returns `PARSE_ERROR` or `EMPTY_RESPONSE`**
 
-  * The server returns structured errors: `PROVIDER_ERROR`, `PARSE_ERROR`, `EMPTY_RESPONSE`. Inspect server logs for raw provider output (the raw model response is printed).
-  * Check that `prompts/prompts.js` is correct. Model output depends on the exact prompt.
-* **MODULE_TYPELESS_PACKAGE_JSON warning**
+  * Cause: provider returned plain text or malformed JSON.
+  * Actions:
 
-  * Fixed by making `prompts/prompts.js` a CommonJS module. No action needed.
+    * Inspect server logs — `lib/aiClient.js` logs raw provider responses.
+    * Try `DEMO_MODE=true` to confirm the frontend flow is okay.
+    * If using OpenAI/HF/Gemini, reduce `maxOutputTokens`, or adjust the prompt to ask the model to return JSON inside triple backticks.
+
 * **Gemini 404 / model not found**
 
-  * Use a supported Gemini model name (e.g., `gemini-2.5-flash` or `gemini-1.5-flash`); sometimes models require account access.
-  * The client retries with `?key=` fallback if header auth fails, and logs both responses.
-* **Large token requests**
+  * Use an accessible Gemini model for your account (try `gemini-1.5-flash` or `gemini-2.5-flash`).
+  * Check that `GEMINI_API_KEY` is set and authorized for the target model.
 
-  * We set `maxOutputTokens=10000` centrally, but models/providers may enforce lower hard limits. If the provider truncates, check logs.
+* **Truncated output**
+
+  * Providers enforce hard token limits. If you request very long expansions, the model may truncate.
+  * Reduce `maxOutputTokens` or make the prompt request a shorter JSON result.
+
+* **No micro-lessons returned**
+
+  * The wrapper returns `{ error: "MISSING: jobDesc" }` if job description is empty — include a job description.
+  * If provider returned non-JSON, `PARSE_ERROR` will be thrown — check server logs.
+
+---
+
+## Recommended improvements (small, safe changes to improve reliability)
+
+These are optional but will dramatically improve UX in real runs:
+
+1. **Normalize token option names** in `lib/aiClient.js` so all providers respect a single `maxOutputTokens` setting. This prevents accidental truncation.
+2. **Add post-parse schema validation** to enforce required keys, word counts and return helpful `warnings` instead of throwing `PARSE_ERROR` immediately.
+3. **Add a small retry/cleanup step**: if the model returns non-JSON, call it once more with an explicit prompt: “You returned invalid JSON; return only the cleaned JSON object (no commentary)”. This improves robustness but costs an extra model call.
+4. **Tighten prompts**: ask models to wrap JSON in triple backticks and a single root object; models often follow this reliably.
+5. **Harden smoke test** to validate against a JSON schema, not hard-coded lesson counts (or allow expected count to be configurable).
+
+---
+
+## Deployment notes
+
+### Vercel
+
+* Import repo into Vercel, set build command `npm run build` and output dir `dist`.
+* Add server env variables in Vercel dashboard (server-side keys: `OPENAI_API_KEY`, etc).
+* Vercel will serve your serverless function at `/api/generate` which matches the default client path.
+
+### Netlify
+
+* Build command: `npm run build` and publish directory `dist`.
+* Add env vars in Site settings.
+* IMPORTANT: set `VITE_FUNCTION_PATH=/.netlify/functions/generate` in Netlify env vars so the client points to Netlify functions.
+
+---
+
+## Developer tips
+
+* Use `DEMO_MODE=true` to develop the UI offline without API keys.
+* Use `npm run start:api` + `npm run dev` during UI development.
+* Use `lib/aiClient.test.js` for CI smoke tests (it spawns the local server in demo mode and validates output shape).
+
+---
+
+## Contributing
+
+1. Fork and create a feature branch.
+2. Add tests where relevant (there’s a smoke test example).
+3. Open a PR with a short explanation of changes.
+4. Keep `prompts/prompts.js` and `prompts/demo_fixture.js` synchronized — demo output must match prompt expectations exactly.
 
 ---
 
 ## License
 
-MIT — open for you to adapt during the competition.
+MIT — see `LICENSE` in this repo.
 
 ---
+
+## Example quick commands
+
+```bash
+# Local dev
+cp .env.example .env
+# (optional) set DEMO_MODE=true in .env for offline testing
+npm install
+npm run start:api   # local server
+npm run dev         # local frontend
+
+# Smoke test
+npm run test:smoke
+
+# Build for production
+npm run build
+```
+
+---
+
+## Contact / Questions
+
+If you run into a provider-specific issue, inspect `lib/aiClient.js` logs first (it prints raw provider responses and HTTP details). If you want, I can:
+
+* patch `lib/aiClient.js` to normalize options and add a graceful JSON-recovery retry, or
+* add schema validation and friendly `warnings` in the response.
